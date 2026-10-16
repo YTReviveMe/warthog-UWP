@@ -43,8 +43,17 @@ if (($changed -join '|') -ne ($expected -join '|')) { throw 'SDL3 source has unr
 
 $msvc = Join-Path $PSScriptRoot 'with-msvc.ps1'
 $project = Join-Path $SdlSource 'VisualC-WinRT\SDL-UWP.vcxproj'
-& $msvc MSBuild.exe $project /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m:$Jobs /v:minimal
-if ($LASTEXITCODE) { throw 'SDL3 build failed.' }
+$previousCl = $env:CL
+$previousLink = $env:LINK
+try {
+    $env:CL = "$previousCl /d1trimfile:`"$SdlSource`""
+    $env:LINK = "$previousLink /PDBALTPATH:%_PDB%"
+    & $msvc MSBuild.exe $project /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m:$Jobs /v:minimal
+    if ($LASTEXITCODE) { throw 'SDL3 build failed.' }
+} finally {
+    $env:CL = $previousCl
+    $env:LINK = $previousLink
+}
 $built = Join-Path $SdlSource 'VisualC-WinRT\x64\Release\SDL-UWP'
 & $msvc powershell -NoProfile -ExecutionPolicy Bypass -File `
     (Join-Path $PSScriptRoot 'test_uwp_runtime_dependencies.ps1') -Path (Join-Path $built 'SDL3.dll')

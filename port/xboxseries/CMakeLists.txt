@@ -61,7 +61,9 @@ set_target_properties(OpenCEUWP PROPERTIES OUTPUT_NAME "Warthog")
 set_property(TARGET OpenCEUWP APPEND PROPERTY LINK_DEPENDS "${REPO_ROOT}/build/uwp/halo_guest.elf")
 target_compile_definitions(OpenCEUWP PRIVATE WINAPI_FAMILY=WINAPI_FAMILY_APP SDL_PLATFORM_WINRT=1 NOMINMAX
   _CRT_SECURE_NO_WARNINGS HALO_GUEST_IMAGE_BASE=0x70000000u)
-target_compile_options(OpenCEUWP PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:/W3>)
+target_compile_options(OpenCEUWP PRIVATE $<$<COMPILE_LANGUAGE:C,CXX>:/W3>
+  "$<$<COMPILE_LANGUAGE:C,CXX>:/clang:-ffile-prefix-map=${REPO_ROOT}=warthog>"
+  "$<$<COMPILE_LANGUAGE:C,CXX>:/clang:-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=build>")
 target_include_directories(OpenCEUWP PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/host"
   "${REPO_ROOT}/port/android/include"

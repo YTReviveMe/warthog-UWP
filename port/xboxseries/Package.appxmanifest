@@ -3,7 +3,7 @@
  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
  IgnorableNamespaces="uap mp">
-  <Identity Name="ReviveMe.Warthog.Xbox" Publisher="CN=ReviveMe" Version="0.7.5.31" ProcessorArchitecture="x64" />
+  <Identity Name="ReviveMe.Warthog.Xbox" Publisher="CN=ReviveMe" Version="0.7.5.0" ProcessorArchitecture="x64" />
   <mp:PhoneIdentity PhoneProductId="8abde025-e280-47bc-99d0-cddbf5d05baa" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties><DisplayName>Warthog</DisplayName><PublisherDisplayName>ReviveMe</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo></Properties>
   <Dependencies>

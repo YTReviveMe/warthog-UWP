@@ -28,6 +28,8 @@ foreach ($name in $required) {
         throw "Missing build output: $name"
     }
 }
+& (Join-Path $PSScriptRoot 'test_uwp_source_paths.ps1') `
+    -BuildDirectory $BuildDirectory -SourceRoot $sourceRoot -Files $required
 
 & (Join-Path $PSScriptRoot 'with-msvc.ps1') powershell -NoProfile -ExecutionPolicy Bypass -File `
     (Join-Path $PSScriptRoot 'test_uwp_runtime_dependencies.ps1') -Path $BuildDirectory
