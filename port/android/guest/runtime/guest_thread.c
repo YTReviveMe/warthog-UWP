@@ -43,6 +43,7 @@ enum
 	_thread_exited,
 };
 
+#undef DEFAULT_STACK_SIZE
 #define DEFAULT_STACK_SIZE (1024 * 1024)
 
 static struct guest_thread main_thread;

@@ -153,6 +153,11 @@ static void files_gather(void)
 		unsigned long size = 0;
 		unsigned char *data;
 
+#ifdef HALO_XBOX_UWP
+            file_add(embedded->path, (const unsigned char *)embedded->data, embedded->size, 0);
+		continue;
+#endif
+
 		snprintf(path, sizeof(path), "%s/%s", folder, embedded->path);
 		data = file_read(path, &size);
 		if (data)

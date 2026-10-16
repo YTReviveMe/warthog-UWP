@@ -1211,10 +1211,16 @@ non-loopback IPv4 address */
 static unsigned long title_address(void)
 {
 	unsigned long override;
+	unsigned long address;
 
 	if (local_address_setting(&override))
 		return override;
+#ifdef HALO_XBOX_UWP
+        address = posix_local_ipv4_address();
+	return address ? address : 0x0100007FUL; /* 127.0.0.1 in network byte order */
+#else
 	return posix_local_ipv4_address();
+#endif
 }
 
 DWORD WSAAPI XNetGetTitleXnAddr(XNADDR *address)

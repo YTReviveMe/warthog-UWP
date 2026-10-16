@@ -40,6 +40,7 @@ typedef int boolean;
 #define TRUE 1
 #define FALSE 0
 #define MAX(a,b) ((a)>(b)?(a):(b))
+#define NUMBEROF(a) (sizeof(a) / sizeof((a)[0]))
 #define PIN(x,a,b) ((x)<(a)?(a):((x)>(b)?(b):(x)))
 #define TEST_FLAG(x,b) (((x)&(1u<<(b)))!=0)
 #define SET_FLAG(x,b,v) ((x)=(v)?((x)|(1u<<(b))):((x)&~(1u<<(b))))

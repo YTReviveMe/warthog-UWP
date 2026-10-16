@@ -137,8 +137,19 @@ int posix_set_file_times(const char *path,
 	posix_ulong access_seconds, posix_ulong access_nanoseconds,
 	posix_ulong modification_seconds, posix_ulong modification_nanoseconds)
 {
-	HANDLE handle = CreateFileA(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+	HANDLE handle;
+#if WINAPI_FAMILY == WINAPI_FAMILY_APP
+	wchar_t wide[MAX_PATH];
+	CREATEFILE2_EXTENDED_PARAMETERS parameters = { sizeof(parameters) };
+	MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, MAX_PATH);
+	parameters.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+	parameters.dwFileFlags = FILE_FLAG_BACKUP_SEMANTICS;
+	handle = CreateFile2(wide, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		OPEN_EXISTING, &parameters);
+#else
+	handle = CreateFileA(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+#endif
 	FILETIME access, modification;
 	BOOL result;
 
@@ -210,7 +221,11 @@ int posix_rename_directory(const char *from, const char *to)
 {
 	/* (MoveFileA never replaces what is there, and moves within a volume
 	only) */
-	return MoveFileA(from, to) ? 0 : fail();
+	wchar_t source[32768], destination[32768];
+	if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, from, -1, source, 32768) ||
+		!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, to, -1, destination, 32768))
+		return fail();
+	return MoveFileFromAppW(source, destination) ? 0 : fail();
 }
 
 int posix_make_directory(const char *path)

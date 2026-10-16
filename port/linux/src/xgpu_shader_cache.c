@@ -352,7 +352,9 @@ static void cache_initialize(void)
 	if (cache.initialized)
 		return;
 	cache.initialized = TRUE;
-	root = platform_save_root();
+	root = getenv("HALO_SHADER_CACHE_ROOT");
+	if (!root || !*root)
+		root = platform_save_root();
 	if (!root || !*root)
 		return;
 	snprintf(cache.path, sizeof(cache.path), "%s/" SHADER_CACHE_FILE, root);

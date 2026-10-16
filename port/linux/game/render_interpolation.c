@@ -683,7 +683,7 @@ static struct observer_result const *render_interpolation_direct_camera(
 	short local_player_index,
 	struct observer_result const *observer)
 {
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_UWP_PC)
 	(void)local_player_index;
 	return observer;
 #else

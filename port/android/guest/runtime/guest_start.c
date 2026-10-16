@@ -29,7 +29,11 @@ void __guest_thread_initialize_main(void);
 
 extern char **__environ;
 
+#ifdef HALO_XBOX_UWP
+__attribute__((section(".guest_header"), used))
+#else
 __attribute__((section("__TEXT,__guest_header"), used))
+#endif
 const struct halo_guest_header __guest_header =
 {
 	HALO_GUEST_MAGIC,
@@ -50,7 +54,7 @@ extern int main(int argc, char **argv);
 
 void __guest_start(const struct halo_guest_boot *boot)
 {
-	void (**constructor)(void);
+	uint32_t constructor, constructor_end;
 	int result;
 
 	libc.page_size = boot->page_size;
@@ -58,8 +62,19 @@ void __guest_start(const struct halo_guest_boot *boot)
 	__environ = (char **)boot->environment;
 	__guest_thread_initialize_main();
 
-	for (constructor = __guest_init_start; constructor < __guest_init_end; constructor++)
-		(*constructor)();
+#ifdef HALO_XBOX_UWP
+	extern void platform_contiguous_initialize(void);
+	platform_contiguous_initialize();
+#else
+	constructor = (uint32_t)(uintptr_t)__guest_init_start;
+	constructor_end = (uint32_t)(uintptr_t)__guest_init_end;
+	while (constructor < constructor_end)
+	{
+		uint32_t function = *(const uint32_t *)(uintptr_t)constructor;
+		((void (*)(void))(uintptr_t)function)();
+		constructor += sizeof(uint32_t);
+	}
+#endif
 
 	result = main((int)boot->argc, (char **)boot->argv);
 	exit(result);

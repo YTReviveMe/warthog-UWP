@@ -2254,7 +2254,12 @@ static void player_profile_edit_select_menu_update_extended_description(
 	}
 	/* port: the PC version's buttons (a list of their own, past its items)
 	leave the last item's description shown, as they have none */
-	if (pc_menu_tag(list_widget->definition_tag_index) && list_widget->focused_child->type == _ui_widget_type_column_list)
+	if ((pc_menu_tag(list_widget->definition_tag_index) && list_widget->focused_child->type == _ui_widget_type_column_list)
+#ifdef HALO_XBOX_UWP
+		|| (!pc_menu_tag(list_widget->definition_tag_index) &&
+			pc_menu_tag(list_widget->focused_child->definition_tag_index))
+#endif
+	)
 		index = NONE;
 
 	if (index != NONE)

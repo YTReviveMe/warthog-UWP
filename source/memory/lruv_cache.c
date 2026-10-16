@@ -221,6 +221,8 @@ void lruv_delete(
 void lruv_idle(
 	struct lruv_cache *cache)
 {
+	if (!cache)
+		return;
 	lruv_cache_verify(cache, FALSE);
 	cache->tick++;
 

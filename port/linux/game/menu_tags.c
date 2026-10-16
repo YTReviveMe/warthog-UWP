@@ -74,6 +74,13 @@ adds to */
 #define MULTIPLAYER_COLLECTION "ui\\shell\\multiplayer"
 /* the tags pause_patch adds: two buttons and their texts */
 #define PAUSE_PATCH_TAGS 4
+#ifdef HALO_XBOX_UWP
+#define PROFILE_PATCH_TAGS 3
+#define XBOX_PROFILE_LIST "ui\\shell\\main_menu\\settings_select\\player_setup\\player_profile_edit\\profile_edit_select_list"
+#define XBOX_PROFILE_SCREEN "ui\\shell\\main_menu\\settings_select\\player_setup\\player_profile_edit\\player_profile_edit_screen"
+#define XBOX_PROFILE_LINE "ui\\shell\\main_menu\\blueline"
+#define VIDEO_SETTINGS_SCREEN "main_menu/settings_select/player_setup/player_profile_edit/video_settings/video_settings_screen"
+#endif
 /* what a frame of ui.map's is drawn as in a game map, which has not got it */
 #define BLANK_PNG "ce/port/blank__0.png"
 #define UI_WIDGET_DEFINITION_TAG 'DeLa'
@@ -1477,13 +1484,21 @@ static long pause_quit_button(struct ui_widget_definition const *list, long quit
 /* a button like the model (its look), its own text, each of the model's
 events (its A and Start) running the function and opening the widget (if
 not NONE) */
-static void *pause_button(struct cache_file_tag_instance *instances, struct ui_widget_definition const *model,
+static void *menu_button(struct cache_file_tag_instance *instances, struct ui_widget_definition const *model,
 	char const *name, char const *text, long function, long widget_tag)
 {
 	struct ui_widget_definition *button = allocate(sizeof(*button));
-	struct ui_widget_event_handler_reference *handlers =
-		allocate(model->event_handlers.count * sizeof(struct ui_widget_event_handler_reference));
-	long text_tag = next_tag(), handler;
+	struct ui_widget_event_handler_reference const *source_handlers =
+		xbox_pointer(model->event_handlers.address);
+	struct ui_widget_event_handler_reference *handlers;
+	long text_tag = next_tag(), handler, source, handler_count = 0;
+
+	for (source = 0; source < model->event_handlers.count; source++)
+		if (source_handlers[source].event_type == 0 || source_handlers[source].event_type == 13)
+			handler_count++;
+	if (!handler_count)
+		handler_count = 2;
+	handlers = allocate(handler_count * sizeof(*handlers));
 
 	if (!button || !handlers)
 		return NULL;
@@ -1493,13 +1508,29 @@ static void *pause_button(struct cache_file_tag_instance *instances, struct ui_w
 	button->string_list_index = 0;
 	button->game_data_inputs.count = 0;
 	button->game_data_inputs.address = XBOX_NULL;
-	/* (the game's memcpy asserts on a NULL source, even for nothing) */
-	if (model->event_handlers.count)
-		memcpy(handlers, xbox_pointer(model->event_handlers.address), model->event_handlers.count * sizeof(*handlers));
-	for (handler = 0; handler < model->event_handlers.count; handler++)
+	for (source = 0, handler = 0; source < model->event_handlers.count; source++)
 	{
-		handlers[handler].flags = FLAG(_event_handler_run_function_bit);
-		handlers[handler].function = (short)function;
+		if (source_handlers[source].event_type != 0 && source_handlers[source].event_type != 13)
+			continue;
+		handlers[handler++] = source_handlers[source];
+	}
+	if (!handler)
+	{
+		memset(handlers, 0, handler_count * sizeof(*handlers));
+		handlers[0].event_type = 0;
+		handlers[1].event_type = 13;
+		handler = handler_count;
+	}
+	button->event_handlers.count = handler_count;
+	for (handler = 0; handler < handler_count; handler++)
+	{
+		handlers[handler].flags = 0;
+		handlers[handler].function = 0;
+		if (function != NONE)
+		{
+			handlers[handler].flags |= FLAG(_event_handler_run_function_bit);
+			handlers[handler].function = (short)function;
+		}
 		handlers[handler].script[0] = 0;
 		reference_set(&handlers[handler].widget_tag, UI_WIDGET_DEFINITION_TAG, widget_tag);
 		if (widget_tag != NONE)
@@ -1511,6 +1542,27 @@ static void *pause_button(struct cache_file_tag_instance *instances, struct ui_w
 	button->event_handlers.address = XBOX_ADDRESS(handlers);
 	return button;
 }
+
+#ifdef HALO_XBOX_UWP
+static struct ui_widget_definition *widget_definition_safe(
+	struct cache_file_tag_instance const *instances, long tag_index)
+{
+	long absolute = DATUM_INDEX_TO_ABSOLUTE_INDEX(tag_index);
+	long count = build.first_index + build.next;
+	struct cache_file_tag_instance const *instance;
+
+	if (tag_index == NONE || absolute < 0 || absolute >= count)
+		return NULL;
+	instance = &instances[absolute];
+	if (instance->tag_index != tag_index || instance->group_tag != UI_WIDGET_DEFINITION_TAG ||
+		!instance->base_address)
+	{
+		return NULL;
+	}
+	return xbox_pointer(instance->base_address);
+}
+
+#endif
 
 /* the list's buttons: SETTINGS (and the host's END GAME) put before LEAVE
 GAME (quit); returns how many were added */
@@ -1530,10 +1582,10 @@ static long pause_list_patch(struct cache_file_tag_instance *instances, struct u
 	if (!grown || settings_widget == NONE || spacing <= 0)
 		return 0;
 	tags[0] = next_tag();
-	buttons[0] = pause_button(instances, model, "pause/settings_button", "SETTINGS",
+	buttons[0] = menu_button(instances, model, "pause/settings_button", "SETTINGS",
 		function_index("profile set edit begin", "pause", 0), build.widget_tags[settings_widget]);
 	tags[1] = host ? next_tag() : NONE;
-	buttons[1] = host ? pause_button(instances, model, "pause/end_game_button", "END GAME",
+	buttons[1] = host ? menu_button(instances, model, "pause/end_game_button", "END GAME",
 		function_index("port pause end game", "pause", 0), NONE) : NULL;
 	if (!buttons[0] || (host && !buttons[1]))
 		return 0;
@@ -1561,6 +1613,143 @@ static long pause_list_patch(struct cache_file_tag_instance *instances, struct u
 	list->bounds.y1 = (short)(list->bounds.y1 + added * spacing);
 	return added;
 }
+
+#ifdef HALO_XBOX_UWP
+static void profile_description_patch(struct cache_file_tag_instance *instances,
+	struct ui_widget_definition *list)
+{
+	static char const *video_text = "Adjust resolution, frame rate,\r\nand graphics settings.";
+	struct ui_widget_definition *description, *text_widget;
+	struct ui_widget_child_reference *description_children;
+	struct string_list *original, *updated, *video;
+	struct string_list_entry *original_entries, *updated_entries, *video_entry;
+	long count, tag;
+
+	description = widget_definition_safe(instances, list->extended_description_widget.index);
+	if (!description || description->child_widgets.count < 1)
+		return;
+	description_children = xbox_pointer(description->child_widgets.address);
+	text_widget = widget_definition_safe(instances, description_children[0].widget_tag.index);
+	if (!text_widget || text_widget->text_label_string_list.index == NONE)
+		return;
+	original = tag_get(UNICODE_STRING_LIST_TAG, text_widget->text_label_string_list.index);
+	if (!original || original->strings.count < 4)
+		return;
+	count = original->strings.count;
+	updated = allocate(sizeof(*updated));
+	updated_entries = allocate((count + 1) * sizeof(*updated_entries));
+	video = string_list_build(&video_text, 1);
+	if (!updated || !updated_entries || !video || video->strings.count != 1)
+		return;
+	original_entries = xbox_pointer(original->strings.address);
+	video_entry = xbox_pointer(video->strings.address);
+	memcpy(updated_entries, original_entries, 4 * sizeof(*updated_entries));
+	updated_entries[4] = video_entry[0];
+	memcpy(updated_entries + 5, original_entries + 4, (count - 4) * sizeof(*updated_entries));
+	updated->strings.count = count + 1;
+	updated->strings.address = XBOX_ADDRESS(updated_entries);
+	tag = next_tag();
+	instance_set(instances, UNICODE_STRING_LIST_TAG, tag, "profile/video_description", "", updated);
+	reference_set(&text_widget->text_label_string_list, UNICODE_STRING_LIST_TAG, tag);
+}
+
+static void profile_settings_patch(struct cache_file_tag_instance *instances)
+{
+	long list_tag = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_PROFILE_LIST);
+	long screen = widget_named(VIDEO_SETTINGS_SCREEN);
+	struct ui_widget_definition *list, *model, *button;
+	struct ui_widget_child_reference *children, *grown;
+	long button_tag, child, count, insert, color_child = NONE, previous_child = NONE;
+	short spacing;
+	short video_offset;
+
+	if (list_tag == NONE || screen == NONE)
+	{
+		platform_log("menus: the Xbox profile menu or video settings screen was not found");
+		return;
+	}
+	list = widget_definition_safe(instances, list_tag);
+	if (!list || list->type != _widget_type_column_list || list->child_widgets.count < 1)
+	{
+		platform_log("menus: the Xbox profile settings list has an unexpected shape");
+		return;
+	}
+	children = xbox_pointer(list->child_widgets.address);
+	count = list->child_widgets.count;
+	for (child = 0; child < count; child++)
+	{
+		if (tag_name_ends(children[child].widget_tag.index, "\\color_profile_item"))
+		{
+			color_child = child;
+			break;
+		}
+	}
+	if (color_child == NONE)
+	{
+		platform_log("menus: the Xbox profile settings color button was not found");
+		return;
+	}
+	model = widget_definition_safe(instances, children[color_child].widget_tag.index);
+	for (child = color_child - 1; child >= 0; child--)
+	{
+		struct ui_widget_definition *previous = widget_definition_safe(instances, children[child].widget_tag.index);
+		if (previous && previous->type == _widget_type_text_box &&
+			children[child].vertical_offset < children[color_child].vertical_offset)
+		{
+			previous_child = child;
+			break;
+		}
+	}
+	spacing = previous_child != NONE ?
+		(short)(children[color_child].vertical_offset - children[previous_child].vertical_offset) : 32;
+	if (!model || spacing <= 0)
+	{
+		platform_log("menus: the Xbox profile settings buttons have an unexpected shape");
+		return;
+	}
+	grown = allocate((count + 1) * sizeof(*grown));
+	button_tag = next_tag();
+	button = menu_button(instances, model, "profile/video_settings_button", "VIDEO SETTINGS", NONE,
+		build.widget_tags[screen]);
+	if (!grown || !button)
+		return;
+	instance_set(instances, UI_WIDGET_DEFINITION_TAG, button_tag, "profile/video_settings_button", "", button);
+	insert = color_child + 1;
+	video_offset = (short)(children[color_child].vertical_offset + spacing);
+	memcpy(grown, children, insert * sizeof(*grown));
+	grown[insert] = children[color_child];
+	reference_set(&grown[insert].widget_tag, UI_WIDGET_DEFINITION_TAG, button_tag);
+	strncpy(grown[insert].name, "video_settings_button", sizeof(grown[insert].name) - 1);
+	grown[insert].vertical_offset = video_offset;
+	for (child = insert; child < count; child++)
+	{
+		grown[child + 1] = children[child];
+		grown[child + 1].vertical_offset = (short)(grown[child + 1].vertical_offset + spacing);
+	}
+	list->child_widgets.address = XBOX_ADDRESS(grown);
+	list->child_widgets.count = count + 1;
+	list->bounds.y1 = (short)(list->bounds.y1 + spacing);
+	{
+		long screen_tag = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_PROFILE_SCREEN);
+		long line_tag = tag_loaded(UI_WIDGET_DEFINITION_TAG, XBOX_PROFILE_LINE);
+		struct ui_widget_definition *profile_screen = widget_definition_safe(instances, screen_tag);
+
+		if (profile_screen && line_tag != NONE)
+		{
+			struct ui_widget_child_reference *screen_children = xbox_pointer(profile_screen->child_widgets.address);
+
+			for (child = 0; child < profile_screen->child_widgets.count; child++)
+			{
+				if (screen_children[child].widget_tag.index == line_tag)
+					screen_children[child].vertical_offset =
+						(short)(screen_children[child].vertical_offset + spacing);
+			}
+		}
+	}
+	profile_description_patch(instances, list);
+}
+
+#endif
 
 /* the Xbox's own box: a widget of the three pausebox2 pieces */
 static boolean pause_box_stock(struct ui_widget_definition const *box)
@@ -1712,9 +1901,15 @@ void menu_tags_loaded(
 	long widget_count, own_lists = 0, total, index;
 
 	boolean game_map = strcmp(map_name, "ui") != 0;
+	boolean pc_menus = menus_pc_chosen();
+#ifdef HALO_XBOX_UWP
+	boolean xbox_patch = !game_map && !pc_menus;
+#else
+	boolean xbox_patch = FALSE;
+#endif
 
 	/* (ui.map, and a multiplayer map: its pause menu's SETTINGS) */
-	if ((game_map && tag_loaded('Soul', MULTIPLAYER_COLLECTION) == NONE) || !menus_pc_chosen())
+	if ((game_map && tag_loaded('Soul', MULTIPLAYER_COLLECTION) == NONE) || (!pc_menus && !xbox_patch))
 	{
 		return;
 	}
@@ -1741,7 +1936,11 @@ void menu_tags_loaded(
 				menus->widgets[index].name);
 	}
 	total = widget_count + own_lists + menus->string_list_count + menus->bitmap_count +
-		(game_map ? PAUSE_PATCH_TAGS : 0);
+		(game_map ? PAUSE_PATCH_TAGS : 0)
+#ifdef HALO_XBOX_UWP
+		+ (xbox_patch ? PROFILE_PATCH_TAGS : 0)
+#endif
+		;
 	instances = build.failed ? NULL : instances_grow(total, &build.first_index, &build.first_salt);
 	if (!instances)
 		goto failed;
@@ -1809,6 +2008,13 @@ void menu_tags_loaded(
 		instances[DATUM_INDEX_TO_ABSOLUTE_INDEX(build.widget_tags[index])].base_address = XBOX_ADDRESS(widget_build(index));
 	if (build.failed)
 		goto failed;
+#ifdef HALO_XBOX_UWP
+	if (xbox_patch)
+	{
+		profile_settings_patch(instances);
+		cache_files_set_tag_instances(instances, build.first_index + build.next);
+	}
+#endif
 	if (game_map)
 	{
 		pause_patch(instances);
@@ -1817,7 +2023,7 @@ void menu_tags_loaded(
 		/* (those it made) */
 		cache_files_set_tag_instances(instances, build.first_index + build.next);
 	}
-	else if (widget_named(menus->root) != NONE)
+	else if (pc_menus && widget_named(menus->root) != NONE)
 	{
 		snprintf(menu_tags.root, sizeof(menu_tags.root), "%s%s", PC_MENU_TAG_PREFIX, menus->root);
 		for (index = 0; menu_tags.root[index]; index++)

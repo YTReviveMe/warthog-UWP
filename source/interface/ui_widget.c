@@ -4483,7 +4483,11 @@ void ui_start_main_menu_music(
 
 		if (sound_definition_index != NONE)
 		{
+#ifdef HALO_ANDROID
+			platform_log("starting main menu music");
+#else
 			error(_error_silent, "starting main menu music");
+#endif
 			scripted_looping_sound_start(sound_definition_index, NONE, 1.0f);
 			widget_globals.main_menu_music_active = TRUE;
 		}
@@ -4505,7 +4509,11 @@ void ui_stop_main_menu_music(
 
 		if (sound_definition_index != NONE)
 		{
+#ifdef HALO_ANDROID
+			platform_log("stopping main menu music");
+#else
 			error(_error_silent, "stopping main menu music");
+#endif
 			scripted_looping_sound_stop(sound_definition_index);
 		}
 		else
@@ -5132,9 +5140,17 @@ static void perform_filesystem_initialization(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		5439,
 		widget_globals.initialization_thread==NULL);
+#ifdef HALO_ANDROID
+	platform_log("beginning filesystem checks and saved-game enumeration");
+#else
 	error(_error_silent, "begining filesystem checks & saved game file enumeration...");
+#endif
 	ui_widgets_inhibit_processing(TRUE);
 	widget_globals.filesystem_check_result = 0;
+#ifdef HALO_XBOX_UWP
+        filesystem_initialization_thread_proc(NULL);
+	ui_widgets_inhibit_processing(FALSE);
+#else
 	if (!create_thread(0, filesystem_initialization_thread_proc, NULL, &widget_globals.initialization_thread))
 	{
 		error(_error_silent, "failed to spawn thread for filesystem checks - running synchronously!");
@@ -5142,6 +5158,7 @@ static void perform_filesystem_initialization(
 		filesystem_initialization_thread_proc(NULL);
 		ui_widgets_inhibit_processing(FALSE);
 	}
+#endif
 
 	return;
 }
@@ -8885,6 +8902,16 @@ void process_ui_widgets(
 	}
 	if (widgets_processed)
 		event_manager_flush();
+#ifdef HALO_XBOX_UWP
+	else
+	{
+		boolean any_widget_active = FALSE;
+		for (widget_index = 0; widget_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; widget_index++)
+			any_widget_active |= widget_globals.active_widgets[widget_index] != NULL;
+		if (!any_widget_active)
+			event_manager_flush();
+	}
+#endif
 
 	return;
 }

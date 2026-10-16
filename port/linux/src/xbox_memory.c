@@ -79,9 +79,13 @@ static int protection_to_host(DWORD protect)
 }
 
 /* Reserve the window before anything else can map into it. */
+#ifndef HALO_XBOX_UWP
 __attribute__((constructor(101)))
+#endif
 #ifdef HALO_64BIT
 static void xbox_address_space_reserve(void)
+#elif defined(HALO_XBOX_UWP)
+void platform_contiguous_initialize(void)
 #else
 static void contiguous_arena_reserve(void)
 #endif

@@ -11,6 +11,7 @@ __pycache__
 build/
 .ninja_*
 build.ninja
+port/xboxseries/third_party/imgui/
 
 # Generated configs
 compile_commands.json
@@ -35,6 +36,12 @@ compile_commands.json
 *.nsp
 *.pkg
 *.self
+*.appx
+*.appxbundle
+*.msix
+*.msixbundle
+*.cer
+*.pfx
 
 # Disc images and the game's own files (never commit)
 *.iso

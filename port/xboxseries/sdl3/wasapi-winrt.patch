@@ -1,0 +1,87 @@
+diff --git a/src/audio/wasapi/SDL_wasapi.c b/src/audio/wasapi/SDL_wasapi.c
+index 122fc8f..8a8b5ae 100644
+--- a/src/audio/wasapi/SDL_wasapi.c
++++ b/src/audio/wasapi/SDL_wasapi.c
+@@ -460,10 +460,14 @@ static bool mgmtthrtask_ActivateDevice(void *userdata)
+ 
+ static bool ActivateWasapiDevice(SDL_AudioDevice *device)
+ {
++#ifdef SDL_PLATFORM_WINRT
++    return WASAPI_ActivateDevice(device);
++#else
+     // this blocks because we're either being notified from a background thread or we're running during device open,
+     //  both of which won't deadlock vs the device thread.
+     bool rc = false;
+     return (WASAPI_ProxyToManagementThread(mgmtthrtask_ActivateDevice, device, &rc) && rc);
++#endif
+ }
+ 
+ // do not call when holding the device lock!
+diff --git a/src/audio/wasapi/SDL_wasapi_winrt.cpp b/src/audio/wasapi/SDL_wasapi_winrt.cpp
+index 3ef3cb2..8f78dd9 100644
+--- a/src/audio/wasapi/SDL_wasapi_winrt.cpp
++++ b/src/audio/wasapi/SDL_wasapi_winrt.cpp
+@@ -45,10 +45,26 @@ extern "C" {
+ using namespace Windows::Devices::Enumeration;
+ using namespace Windows::Media::Devices;
+ using namespace Windows::Foundation;
++using namespace Windows::UI::Core;
+ using namespace Microsoft::WRL;
+ 
+ static Platform::String ^ SDL_PKEY_AudioEngine_DeviceFormat = L"{f19f064d-082c-4e27-bc73-6882a1bb8e4c} 0";
+ 
++static void WaitForSemaphore(SDL_Semaphore *semaphore)
++{
++    CoreWindow ^ window = CoreWindow::GetForCurrentThread();
++
++    if (!window) {
++        SDL_WaitSemaphore(semaphore);
++        return;
++    }
++
++    while (!SDL_TryWaitSemaphore(semaphore)) {
++        window->Dispatcher->ProcessEvents(CoreProcessEventsOption::ProcessAllIfPresent);
++        SDL_Delay(1);
++    }
++}
++
+ 
+ static bool FindWinRTAudioDeviceCallback(SDL_AudioDevice *device, void *userdata)
+ {
+@@ -202,7 +218,7 @@ void SDL_WasapiDeviceEventHandler::OnDefaultCaptureDeviceChanged(Platform::Objec
+ void SDL_WasapiDeviceEventHandler::WaitForCompletion()
+ {
+     if (this->completed_semaphore) {
+-        SDL_WaitSemaphore(this->completed_semaphore);
++        WaitForSemaphore(this->completed_semaphore);
+         SDL_DestroySemaphore(this->completed_semaphore);
+         this->completed_semaphore = nullptr;
+     }
+@@ -213,6 +229,10 @@ static SDL_WasapiDeviceEventHandler *recording_device_event_handler;
+ 
+ bool WASAPI_PlatformInit(void)
+ {
++    const HRESULT result = Windows::Foundation::Initialize(RO_INIT_MULTITHREADED);
++    if (FAILED(result)) {
++        return WIN_SetErrorFromHRESULT("WASAPI WinRT initialization failed", result);
++    }
+     return true;
+ }
+ 
+@@ -227,6 +247,7 @@ static void StopWasapiHotplug(void)
+ void WASAPI_PlatformDeinit(void)
+ {
+     StopWasapiHotplug();
++    Windows::Foundation::Uninitialize();
+ }
+ 
+ void WASAPI_PlatformDeinitializeStart(void)
+@@ -270,7 +291,7 @@ private:
+ void SDL_WasapiActivationHandler::WaitForCompletion()
+ {
+     if (completion_semaphore) {
+-        SDL_WaitSemaphore(completion_semaphore);
++        WaitForSemaphore(completion_semaphore);
+         SDL_DestroySemaphore(completion_semaphore);
+         completion_semaphore = NULL;
+     }

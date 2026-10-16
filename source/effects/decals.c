@@ -882,7 +882,7 @@ pixel32 real_a_rgb_color_to_pixel32(
 void decals_update(
 	void)
 {
-	if (global_decal_data->valid)
+	if (global_decal_data && global_decal_data->valid)
 	{
 		struct data_iterator iterator;
 

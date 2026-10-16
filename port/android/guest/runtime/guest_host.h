@@ -27,6 +27,9 @@ void host_exit(int code) __attribute__((noreturn));
 /* the host's errno on this thread, after a call to a host function */
 int host_errno(void);
 
+int host_decompress_map(const char *source_path, const char *destination_path,
+	unsigned int decompressed_size, unsigned int destination_size);
+
 /* ---------- threads
 
 The guest's thread pointer (its struct pthread) is kept by the host for

@@ -146,7 +146,7 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 	mouse_pending_y = 0.0f;
 	mouse_polls_unconsumed = 0;
 	pthread_mutex_unlock(&mouse_lock);
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_XBOX_UWP)
 	/* the touch controls' swipe; it is not the mouse's aiming
 	(halo_linux_mouse_aiming), so a thumb keeps the stick's magnetism */
 	touch_input_look(scale, yaw, pitch);
@@ -855,6 +855,7 @@ static int sdl_gamepads(SDL_Gamepad *gamepads[PORT_COUNT])
 }
 
 /* whether one gamepad is port 1's (port_gamepad) */
+#ifndef HALO_XBOX_UWP
 static BOOL lone_gamepad_split;
 
 /* no button of the gamepad held, its sticks and triggers at rest */
@@ -874,14 +875,11 @@ static BOOL gamepad_idle(SDL_Gamepad *gamepad)
 	}
 	return TRUE;
 }
+#endif
 
-/* the gamepad of a port: the first shares port 0 with the keyboard, but for
-two or more players with one gamepad (co-op, split screen), port 1 has it
-(the keyboard's player is 1, the gamepad's 2). It changes port only at rest:
-a button held across the change would be pressed again on the other port
-(the B that leaves a profile screen leaving the game as player 1's) */
 static SDL_Gamepad *port_gamepad(SDL_Gamepad *gamepads[PORT_COUNT], int count, int port)
 {
+#ifndef HALO_XBOX_UWP
 	if (count == 1)
 	{
 		BOOL split = pc_menu_split_players() != 0;
@@ -891,6 +889,7 @@ static SDL_Gamepad *port_gamepad(SDL_Gamepad *gamepads[PORT_COUNT], int count, i
 		if (lone_gamepad_split)
 			return port == 1 ? gamepads[0] : NULL;
 	}
+#endif
 	return port < count ? gamepads[port] : NULL;
 }
 
@@ -1091,7 +1090,11 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		keyboard_actions_held = 0;
 		keys_held_over_switch(&input);
 		test_input_menu_keys(&input);
-		if (!console_is_active())
+		if (!console_is_active()
+#ifdef HALO_XBOX_UWP
+			&& count == 0
+#endif
+		)
 		{
 			if (input.menus)
 				keyboard_gamepad(&input, &state->Gamepad);
@@ -1101,8 +1104,10 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		if (port_gamepad(gamepads, count, 0))
 			sdl_gamepad_state(gamepads[0], &state->Gamepad);
 		test_input_gamepad(&state->Gamepad);
+#ifndef HALO_XBOX_UWP
 		touch_input_gamepad(&state->Gamepad);
-#ifdef HALO_ANDROID
+#endif
+#if defined(HALO_ANDROID) && !defined(HALO_XBOX_UWP)
 		touch_input_controls(&state->Gamepad, input.menus);
 #endif
 		if (abs(state->Gamepad.sThumbRX) > STICK_AIMING_DEFLECTION ||
@@ -1138,7 +1143,7 @@ DWORD WINAPI XInputSetState(HANDLE device, PXINPUT_FEEDBACK feedback)
 	feedback->Header.dwStatus = ERROR_SUCCESS;
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_XBOX_UWP)
 	/* the phone vibrates for the touch controls' player */
 	if (port == 0)
 		touch_input_rumble(feedback->Rumble.wLeftMotorSpeed, feedback->Rumble.wRightMotorSpeed);

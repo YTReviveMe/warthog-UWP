@@ -140,6 +140,7 @@ context exists */
 static int anti_aliasing_value = -1;
 static int anti_aliasing_samples;
 static GLint anti_aliasing_maximum_samples, maximum_target_size;
+static BOOL anti_aliasing_multisample_failed;
 
 static void anti_aliasing_prepare(void);
 
@@ -173,7 +174,7 @@ static int anti_aliasing(void)
 
 static void screen_mode_choose(long *width, float scale[2])
 {
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_UWP_PC)
 	/* display.screen_width, or 0 for the display's shape, which the app
 	passes (port/android/host/host_main.c) */
 	const char *display = getenv("HALO_DISPLAY_WIDTH");
@@ -1274,6 +1275,7 @@ static GLuint framebuffer_find(GLuint color, GLuint depth, BOOL renderbuffers)
 {
 	struct framebuffer_entry *entry, **link;
 	GLenum draw_buffer = color ? GL_COLOR_ATTACHMENT0 : GL_NONE;
+	GLenum status;
 
 	/* (found, it moves to the front: each draw asks again for the one
 	the draw before it did) */
@@ -1308,8 +1310,15 @@ static GLuint framebuffer_find(GLuint color, GLuint depth, BOOL renderbuffers)
 			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depth, 0);
 	}
 	glDrawBuffers(1, &draw_buffer);
-	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-		platform_log("framebuffer %u/%u%s is incomplete", color, depth, renderbuffers ? " (multisampled)" : "");
+	glReadBuffer(draw_buffer);
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (status != GL_FRAMEBUFFER_COMPLETE)
+	{
+		platform_log("framebuffer %u/%u%s is incomplete (0x%x)", color, depth,
+			renderbuffers ? " (multisampled)" : "", (unsigned int)status);
+		if (renderbuffers)
+			anti_aliasing_multisample_failed = TRUE;
+	}
 	xgpu_gl_state_invalidate();
 	entry->next = framebuffers;
 	framebuffers = entry;
@@ -1410,6 +1419,43 @@ static void render_target_multisample(struct xgpu_render_target *target, int sam
 	xgpu_gl_state_invalidate();
 }
 
+static BOOL multisample_supported(int samples)
+{
+	static GLuint color, depth, framebuffer;
+	GLenum draw_buffer = GL_COLOR_ATTACHMENT0;
+	GLenum status;
+
+	while (glGetError() != GL_NO_ERROR)
+	{
+	}
+	if (!color)
+		glGenRenderbuffers(1, &color);
+	glBindRenderbuffer(GL_RENDERBUFFER, color);
+	glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, 1, 1);
+	if (!depth)
+		glGenRenderbuffers(1, &depth);
+	glBindRenderbuffer(GL_RENDERBUFFER, depth);
+	glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, 1, 1);
+	if (!framebuffer)
+		glGenFramebuffers(1, &framebuffer);
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, color);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depth);
+	glDrawBuffers(1, &draw_buffer);
+	glReadBuffer(draw_buffer);
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	if (glGetError() != GL_NO_ERROR)
+		status = 0;
+	glBindRenderbuffer(GL_RENDERBUFFER, 0);
+	xgpu_gl_state_invalidate();
+	return status == GL_FRAMEBUFFER_COMPLETE;
+}
+
+static int multisample_lower(int samples)
+{
+	return samples > 4 ? 4 : samples > 2 ? 2 : 0;
+}
+
 /* counts draws and clears into render targets (xgpu_render_target.written) */
 static unsigned long render_target_write_serial;
 
@@ -1471,13 +1517,53 @@ static BOOL bind_targets(BOOL *has_depth)
 		render_target_multisample(&depth->target, samples);
 	if (samples)
 	{
-		state_framebuffer(framebuffer_find(color ? color->target.multisample : 0,
-			depth ? depth->target.multisample : 0, TRUE));
-		if (color)
-			color->target.unresolved = TRUE;
-		if (depth)
-			depth->target.unresolved = TRUE;
-		target_samples = samples;
+		GLuint framebuffer = 0;
+
+		for (;;)
+		{
+			anti_aliasing_multisample_failed = FALSE;
+			if (color)
+				render_target_multisample(&color->target, samples);
+			if (depth)
+				render_target_multisample(&depth->target, samples);
+			framebuffer = framebuffer_find(color ? color->target.multisample : 0,
+				depth ? depth->target.multisample : 0, TRUE);
+			glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+			if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+				anti_aliasing_multisample_failed = TRUE;
+			if (!anti_aliasing_multisample_failed)
+				break;
+			int next = multisample_lower(samples);
+
+			platform_log("anti-aliasing: %dx MSAA failed at %lux%lu, trying %dx", samples,
+				color ? color->target.gl_width : depth->target.gl_width,
+				color ? color->target.gl_height : depth->target.gl_height, next);
+			samples = next;
+			anti_aliasing_samples = samples;
+			if (samples < 2)
+				break;
+		}
+
+		if (samples < 2)
+		{
+			platform_log("anti-aliasing: no compatible multisampled framebuffer, so MSAA is disabled");
+			if (color)
+				render_target_multisample(&color->target, 0);
+			if (depth)
+				render_target_multisample(&depth->target, 0);
+			state_framebuffer(framebuffer_get(color ? color->target.texture : 0,
+				depth ? depth->target.texture : 0));
+			target_samples = 1;
+		}
+		else
+		{
+			state_framebuffer(framebuffer);
+			if (color)
+				color->target.unresolved = TRUE;
+			if (depth)
+				depth->target.unresolved = TRUE;
+			target_samples = samples;
+		}
 	}
 	else
 	{
@@ -1672,6 +1758,15 @@ static void anti_aliasing_prepare(void)
 		platform_log("anti-aliasing: the GPU has at most %d samples a pixel", (int)anti_aliasing_maximum_samples);
 		anti_aliasing_samples = anti_aliasing_maximum_samples < 2 ? 0 : anti_aliasing_maximum_samples;
 	}
+	anti_aliasing_multisample_failed = FALSE;
+	while (mode == _anti_aliasing_msaa && anti_aliasing_samples >= 2 &&
+		!multisample_supported(anti_aliasing_samples))
+	{
+		platform_log("anti-aliasing: %dx MSAA framebuffer is unsupported", anti_aliasing_samples);
+		anti_aliasing_samples = multisample_lower(anti_aliasing_samples);
+	}
+	if (mode == _anti_aliasing_msaa && anti_aliasing_samples < 2)
+		platform_log("anti-aliasing: no compatible multisampled framebuffer, so MSAA is disabled");
 	if ((mode == _anti_aliasing_fxaa || mode == _anti_aliasing_smaa) && !xgpu_post_prepare(mode == _anti_aliasing_smaa))
 		platform_log("anti-aliasing: its programs do not build, so the 3D view is not antialiased");
 	xgpu_gl_state_invalidate();
@@ -1940,7 +2035,7 @@ long halo_screen_commit(void)
 		screen_width = width;
 		screen_scale[0] = scale[0];
 		screen_scale[1] = scale[1];
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) || defined(HALO_UWP_PC)
 		if (device.created)
 		{
 			device.presentation.BackBufferWidth = (UINT)width;

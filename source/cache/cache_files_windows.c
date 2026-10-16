@@ -196,6 +196,13 @@ symbols in this file:
 
 #include <xtl.h>
 
+#if defined(HALO_XBOX_UWP)
+int host_decompress_map(const char *source_path, const char *destination_path,
+	unsigned int decompressed_size, unsigned int destination_size);
+void platform_translate_path(const char *xbox_path, char *host_path,
+	unsigned long host_path_size);
+#endif
+
 /* ---------- constants */
 
 enum
@@ -773,12 +780,18 @@ boolean cache_files_precache_map_begin(
 
 		if (cache_file_read_header_from_dvd(cache_map_name, &header))
 		{
-			long buffer_size = cache_copy_buffer_size(copy_map);
 			short map_file_index = cached_map_files_find_free_map(
 				header.file_length,
 				header.scenario_type);
-			void *buffer;
 			struct cached_map_file *map_file;
+#if defined(HALO_XBOX_UWP)
+			char destination[256];
+			char source_host[1024];
+			char destination_host[1024];
+#else
+			long buffer_size = cache_copy_buffer_size(copy_map);
+			void *buffer;
+#endif
 
 			/* port: the cache file slots are found by the name in their
 			header (cached_map_files_find_map): a map file whose header names
@@ -811,7 +824,9 @@ boolean cache_files_precache_map_begin(
 
 				return FALSE;
 			}
+#if !defined(HALO_XBOX_UWP)
 			buffer = texture_cache_steal_memory(buffer_size);
+#endif
 			map_file = cached_map_file_get(map_file_index);
 
 			memset(
@@ -827,6 +842,36 @@ boolean cache_files_precache_map_begin(
 			cache_file_globals.copying_to_map_file_name[
 				sizeof(cache_file_globals.copying_to_map_file_name) - 1] = 0;
 			cache_file_get_map_path(cache_map_name, path);
+#if defined(HALO_XBOX_UWP)
+			cached_map_file_get_path(map_file_index, destination);
+			platform_translate_path(path, source_host, sizeof(source_host));
+			platform_translate_path(destination, destination_host, sizeof(destination_host));
+			CloseHandle(map_file->file);
+			map_file->file = INVALID_HANDLE_VALUE;
+			if (!host_decompress_map(source_host, destination_host,
+				(unsigned int)header.file_length,
+				(unsigned int)cached_map_file_get_size(map_file_index)))
+			{
+				map_file->file = CreateFileA(destination, GENERIC_READ | GENERIC_WRITE,
+					0, NULL, OPEN_ALWAYS, FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED, NULL);
+				cache_file_globals.copy_in_progress = FALSE;
+				cache_file_globals.copying_to_map_file_index = NONE;
+				return FALSE;
+			}
+			map_file->file = CreateFileA(destination, GENERIC_READ | GENERIC_WRITE,
+				0, NULL, OPEN_EXISTING, FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED, NULL);
+			if (map_file->file == INVALID_HANDLE_VALUE)
+			{
+				cache_file_globals.copy_in_progress = FALSE;
+				cache_file_globals.copying_to_map_file_index = NONE;
+				return FALSE;
+			}
+			cached_map_file_set_modification_date(map_file_index);
+			cached_map_file_read_header(map_file_index);
+			cache_file_globals.copy_in_progress = FALSE;
+			cache_file_globals.copying_to_map_file_index = NONE;
+			return cached_map_files_find_map(cache_map_name) != NONE;
+#else
 			error(_error_silent, "starting precaching of map '%s'", cache_map_name);
 			cache_copy_begin(
 				buffer,
@@ -834,6 +879,7 @@ boolean cache_files_precache_map_begin(
 				cached_map_file_get_handle(map_file_index),
 				cached_map_file_get_size(map_file_index),
 				path);
+#endif
 		}
 		else
 		{
@@ -864,7 +910,9 @@ void cache_files_initialize(
 		188,
 		cache_file_globals.requests);
 	cache_file_windows_thread_create();
+#ifndef HALO_XBOX_UWP
 	cache_files_verify_language();
+#endif
 	cache_files_open_cache_files();
 	cache_copy_initialize();
 
@@ -1201,8 +1249,10 @@ static void cache_files_open_cache_files(
 			NULL);
 		if (file != INVALID_HANDLE_VALUE)
 		{
-			if (GetLastError() == ERROR_ALREADY_EXISTS &&
-				GetFileSize(file, NULL) == (unsigned long)size)
+			DWORD open_error = GetLastError();
+			DWORD actual_size = GetFileSize(file, NULL);
+			if (open_error == ERROR_ALREADY_EXISTS &&
+				actual_size == (unsigned long)size)
 			{
 				valid = TRUE;
 			}

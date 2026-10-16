@@ -20,6 +20,8 @@ and the debug keyboard that the game's console reads.
 #include "crash_report.h"
 
 #include <SDL3/SDL.h>
+#include <errno.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -875,6 +877,64 @@ int platform_window_sizes(long *widths, long *heights, int maximum)
 }
 
 #else
+#ifdef HALO_UWP_PC
+static BOOL platform_uwp_resolution(long *width, long *height)
+{
+	const char *text = config_string("display.resolution");
+	char *end;
+
+	*width = strtol(text, &end, 10);
+	*height = *end == 'x' || *end == 'X' ? strtol(end + 1, &end, 10) : 0;
+	return !*end && *width >= 640 && *height >= 480;
+}
+
+BOOL platform_screen_mode(long *width, long *height)
+{
+	long selected_width, selected_height;
+	int drawable_width = 1920, drawable_height = 1080;
+
+	if (!strcmp(config_string("display.resolution_scaling"), "original"))
+		return FALSE;
+	if (platform_window)
+		SDL_GetWindowSizeInPixels(platform_window, &drawable_width, &drawable_height);
+	if (drawable_width <= 0 || drawable_height <= 0)
+	{
+		drawable_width = 1920;
+		drawable_height = 1080;
+	}
+	*width = drawable_width;
+	*height = drawable_height;
+	if (platform_uwp_resolution(&selected_width, &selected_height) &&
+		selected_width <= *width && selected_height <= *height)
+	{
+		*width = selected_width;
+		*height = selected_height;
+	}
+	return TRUE;
+}
+
+int platform_display_resolutions(long *widths, long *heights, int maximum)
+{
+	static const short modes[][2] = { { 1600, 900 }, { 1280, 720 }, { 640, 480 } };
+	int count = maximum < 3 ? maximum : 3;
+	int index;
+
+	for (index = 0; index < count; index++)
+	{
+		widths[index] = modes[index][0];
+		heights[index] = modes[index][1];
+	}
+	return count;
+}
+
+int platform_window_sizes(long *widths, long *heights, int maximum)
+{
+	(void)widths;
+	(void)heights;
+	(void)maximum;
+	return 0;
+}
+#else
 int platform_display_resolutions(long *widths, long *heights, int maximum)
 {
 	(void)widths;
@@ -891,6 +951,7 @@ int platform_window_sizes(long *widths, long *heights, int maximum)
 	return 0;
 }
 
+#endif
 #endif
 #ifndef HALO_ANDROID
 /* the window's size (platform_window_size_setting), as the window was made
@@ -1068,7 +1129,27 @@ void platform_video_drawable_size(int *width, int *height)
 	SDL_GetWindowSizeInPixels(platform_window, width, height);
 }
 
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) || defined(HALO_UWP_PC)
+#ifdef HALO_UWP_PC
+static Uint64 frame_ticks_ns(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (Uint64)now.tv_sec * 1000000000ULL + (Uint64)now.tv_nsec;
+}
+
+static void frame_delay_ns(Uint64 delay)
+{
+	struct timespec duration;
+
+	duration.tv_sec = (time_t)(delay / 1000000000ULL);
+	duration.tv_nsec = (long)(delay % 1000000000ULL);
+	while (nanosleep(&duration, &duration) == -1 && errno == EINTR)
+		;
+}
+#endif
+
 /* with vsync off, the time between frames display.max_fps asks for (0:
 twice the display's refresh rate), or 0 for no limit. A GPU never left idle
 can hang (Intel's Raptor Lake graphics, whose reset then takes the desktop
@@ -1091,10 +1172,14 @@ static Uint64 frame_interval_ns(void)
 	rate = (float)maximum;
 	if (!maximum)
 	{
+#ifdef HALO_UWP_PC
+		rate = 120.0f;
+#else
 		SDL_DisplayID display = SDL_GetDisplayForWindow(platform_window);
 		const SDL_DisplayMode *mode = display ? SDL_GetCurrentDisplayMode(display) : NULL;
 
 		rate = 2.0f * (mode && mode->refresh_rate > 0.0f ? mode->refresh_rate : 60.0f);
+#endif
 	}
 	return (Uint64)(1e9f / rate);
 }
@@ -1102,20 +1187,28 @@ static Uint64 frame_interval_ns(void)
 #endif
 void platform_video_swap(void)
 {
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) || defined(HALO_UWP_PC)
 	static Uint64 next_frame;
 	Uint64 interval, now;
 
 #endif
 	SDL_GL_SwapWindow(platform_window);
-#ifndef HALO_ANDROID
+#if !defined(HALO_ANDROID) || defined(HALO_UWP_PC)
 	interval = frame_interval_ns();
 	if (!interval)
 		return;
+#ifdef HALO_UWP_PC
+	now = frame_ticks_ns();
+#else
 	now = SDL_GetTicksNS();
+#endif
 	if (next_frame > now)
 	{
+#ifdef HALO_UWP_PC
+		frame_delay_ns(next_frame - now);
+#else
 		SDL_DelayPrecise(next_frame - now);
+#endif
 		now = next_frame;
 	}
 	/* (a frame more than an interval late starts the count again) */
@@ -1763,7 +1856,7 @@ void platform_pump_events(void)
 			memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
 			memset(mouse_buttons_pressed, 0, sizeof(mouse_buttons_pressed));
 			input_state.focused = FALSE;
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_XBOX_UWP)
 			touch_input_cancel();
 #endif
 			break;
@@ -1775,7 +1868,7 @@ void platform_pump_events(void)
 				platform_mouse_capture(TRUE);
 #endif
 			break;
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_XBOX_UWP)
 		case SDL_EVENT_FINGER_DOWN:
 		case SDL_EVENT_FINGER_MOTION:
 		case SDL_EVENT_FINGER_UP:

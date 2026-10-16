@@ -820,42 +820,45 @@ void game_precache_new_map(
 			}
 		}
 
-		cache_files_precache_set_priority(blocking);
-		if (blocking)
+		if (!cache_files_precache_map_loaded(map_name))
 		{
-			struct game_runtime_globals_prefix *globals = game_globals;
-
-			globals->map_load_in_progress = TRUE;
-			globals->loading_progress = 0.0f;
-			match_assert(
-				"c:\\halo\\SOURCE\\game\\game.c",
-				0x105,
-				cache_files_precache_in_progress() &&
-					cache_files_precache_is_copying_map(map_name));
-			ui_widget_load_progress_widget();
-			progress_bar_begin(global_scenario_index != NONE);
-			do
+			cache_files_precache_set_priority(blocking);
+			if (blocking)
 			{
-				map_status = cache_files_precache_map_status(
-					&game_globals->loading_progress);
-				main_pregame_render();
-				main_rasterizer_throttle();
-				main_present_frame();
-			}
-			while (!map_status);
+				struct game_runtime_globals_prefix *globals = game_globals;
 
-			progress_bar_end();
-			ui_widgets_close_all();
-			if (map_status == _cached_map_file_failed)
-				display_error_damaged_media();
-			cache_files_precache_map_end();
-			match_assert(
-				"c:\\halo\\SOURCE\\game\\game.c",
-				0x11A,
-				cache_files_precache_map_loaded(map_name));
-			globals = game_globals;
-			globals->map_load_in_progress = FALSE;
-			globals->loading_progress = 1.0f;
+				globals->map_load_in_progress = TRUE;
+				globals->loading_progress = 0.0f;
+				match_assert(
+					"c:\\halo\\SOURCE\\game\\game.c",
+					0x105,
+					cache_files_precache_in_progress() &&
+					cache_files_precache_is_copying_map(map_name));
+				ui_widget_load_progress_widget();
+				progress_bar_begin(global_scenario_index != NONE);
+				do
+				{
+					map_status = cache_files_precache_map_status(
+						&game_globals->loading_progress);
+					main_pregame_render();
+					main_rasterizer_throttle();
+					main_present_frame();
+				}
+				while (!map_status);
+
+				progress_bar_end();
+				ui_widgets_close_all();
+				if (map_status == _cached_map_file_failed)
+					display_error_damaged_media();
+				cache_files_precache_map_end();
+				match_assert(
+					"c:\\halo\\SOURCE\\game\\game.c",
+					0x11A,
+					cache_files_precache_map_loaded(map_name));
+				globals = game_globals;
+				globals->map_load_in_progress = FALSE;
+				globals->loading_progress = 1.0f;
+			}
 		}
 	}
 

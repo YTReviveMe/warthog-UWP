@@ -936,6 +936,10 @@ boolean playlist_profile_get_options(long playlist_profile_index, struct game_va
 #endif
 #include "text/unicode.h"
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
+#ifdef HALO_XBOX_UWP
+#include "platform.h"
+char const *pc_menu_function_name(long function_index);
+#endif
 
 #ifdef HALO_CUSTOM_EDITION
 #include "halo_ui_map_list.h"
@@ -2364,6 +2368,29 @@ static boolean main_menu_initialize(
 	struct event_record *event,
 	boolean *widget_deleted)
 {
+#ifdef HALO_XBOX_UWP
+        word profile_count = 1;
+	long profile_index = NONE;
+	struct player_profile profile;
+
+	player_profiles_enumerate_available_to_local_player_index(
+		NONE, &profile_count, &profile_index, FALSE);
+	if ((short)profile_count <= 0 || profile_index == NONE ||
+		!player_profile_get(profile_index, &profile))
+	{
+		wchar_t profile_name[128];
+
+		saved_game_file_get_useable_untitled_profile_name(profile_name);
+		profile_index = profile_name[0] ? player_profile_new(0, profile_name) : NONE;
+		if (profile_index != NONE && player_profile_get(profile_index, &profile))
+		{
+			player_ui_set_active_player_profile(0, profile_index, &profile);
+			player_ui_set_single_player_local_player_controller(0, 0);
+		}
+	}
+	else
+		player_ui_set_active_player_profile(0, profile_index, &profile);
+#endif
 	player_ui_clear_multiplayer_joins();
 	player_ui_clear_multiplayer_variant();
 	dispose_global_network_game_client();
@@ -3497,8 +3524,10 @@ boolean ui_widget_event_handler_function_invoke(
 	{
 		extern boolean pc_menu_event_function_invoke(struct widget_instance *widget, struct event_record *event,
 			long function_index, boolean *widget_deleted);
+		long pc_function_index = function_index - PC_MENU_FUNCTION_BASE;
 
-		return pc_menu_event_function_invoke(widget, event, function_index - PC_MENU_FUNCTION_BASE, widget_deleted);
+		result = pc_menu_event_function_invoke(widget, event, pc_function_index, widget_deleted);
+		return result;
 	}
 	if ((short)function_index >= 0 && function_index < 102)
 	{

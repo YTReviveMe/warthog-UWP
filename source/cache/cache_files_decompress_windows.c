@@ -509,6 +509,10 @@ static void cache_copy_issue_initial_reads(
 	struct simple_decompressor_definition *self);
 static void cache_copy_run_decompression(
 	struct simple_decompressor_definition *self);
+#ifdef HALO_XBOX_UWP
+static boolean cache_copy_run_xbox_buffered(
+	struct simple_decompressor_definition *self);
+#endif
 static unsigned long __stdcall simple_cache_copy_thread(
 	void *parameter);
 void CALLBACK cache_copy_FileIOCompletionRoutine(
@@ -1689,11 +1693,102 @@ static void cache_copy_run_decompression(
 	return;
 }
 
+#ifdef HALO_XBOX_UWP
+static boolean cache_copy_run_xbox_buffered(
+	struct simple_decompressor_definition *self)
+{
+	byte *input = self->read_buffers[0];
+	byte *output = self->write_buffers[0];
+	unsigned long input_capacity = NUMBER_OF_READ_BUFFERS * READ_BUFFER_SIZE;
+	unsigned long output_total = 0;
+	unsigned long expected_output;
+	DWORD transferred;
+	long zlib_result = Z_OK;
+	boolean succeeded = FALSE;
+	struct cache_file_header blank_header = {0};
+
+	XPhysicalProtect(input, input_capacity, PAGE_READWRITE);
+	XPhysicalProtect(output, WRITE_BUFFER_SIZE, PAGE_READWRITE);
+	SetFilePointer(self->destination_file, 0, NULL, FILE_BEGIN);
+	if (!WriteFile(self->destination_file, &blank_header, sizeof(blank_header), &transferred, NULL) ||
+		transferred != sizeof(blank_header))
+	{
+		cache_copy_set_flag(_copy_write_failed_bit);
+		return FALSE;
+	}
+	SetFilePointer(self->source_file, 0, NULL, FILE_BEGIN);
+	if (!ReadFile(self->source_file, &self->header, sizeof(self->header), &transferred, NULL) ||
+		transferred != sizeof(self->header) ||
+		!cache_file_header_verify(&self->header, "cache decompressed", TRUE))
+	{
+		cache_copy_set_flag(_copy_read_failed_bit);
+		return FALSE;
+	}
+	expected_output = self->header.size - sizeof(self->header);
+	self->read_progress = 0.0f;
+	cache_copy_initialize_zlib(self);
+	SetFilePointer(self->destination_file, sizeof(self->header), NULL, FILE_BEGIN);
+
+	while (!cache_copy_stop_requested() && output_total < expected_output)
+	{
+		unsigned long produced;
+
+		if (!self->zlib_stream.avail_in)
+		{
+			if (!ReadFile(self->source_file, input, input_capacity, &transferred, NULL) || !transferred)
+			{
+				cache_copy_set_flag(_copy_read_failed_bit);
+				break;
+			}
+			self->zlib_stream.next_in = input;
+			self->zlib_stream.avail_in = transferred;
+			self->read_progress = (real)(GetFileSize(self->source_file, NULL) -
+				(self->read_file_size - SetFilePointer(self->source_file, 0, NULL, FILE_CURRENT))) /
+				(real)self->read_file_size;
+		}
+
+		self->zlib_stream.next_out = output;
+		self->zlib_stream.avail_out = WRITE_BUFFER_SIZE;
+		zlib_result = inflate(&self->zlib_stream, 0);
+		produced = WRITE_BUFFER_SIZE - self->zlib_stream.avail_out;
+		if (produced && (!WriteFile(self->destination_file, output, produced, &transferred, NULL) ||
+			transferred != produced))
+		{
+			cache_copy_set_flag(_copy_write_failed_bit);
+			break;
+		}
+		output_total += produced;
+		if (zlib_result == Z_STREAM_END)
+			break;
+		if (zlib_result != Z_OK || (!produced && self->zlib_stream.avail_in))
+		{
+			cache_copy_set_flag(_copy_bad_file_bit);
+			break;
+		}
+	}
+
+	if (zlib_result == Z_STREAM_END && output_total == expected_output && !cache_copy_stop_requested())
+	{
+		SetFilePointer(self->destination_file, 0, NULL, FILE_BEGIN);
+		if (WriteFile(self->destination_file, &self->header, sizeof(self->header), &transferred, NULL) &&
+			transferred == sizeof(self->header))
+			succeeded = TRUE;
+		else
+			cache_copy_set_flag(_copy_write_failed_bit);
+	}
+	else if (!cache_copy_stop_requested() && !(global_self->flags & ALL_COPY_FAILURE_FLAGS))
+	{
+		cache_copy_set_flag(_copy_bad_file_bit);
+	}
+	cache_copy_dispose_zlib(self);
+	return succeeded;
+}
+#endif
+
 static unsigned long __stdcall simple_cache_copy_thread(
 	void *parameter)
 {
 	struct simple_decompressor_definition *self = global_self;
-
 	for (;;)
 	{
 		WaitForSingleObject(self->copy_start_event, INFINITE);
@@ -1704,6 +1799,10 @@ static unsigned long __stdcall simple_cache_copy_thread(
 		cache_copy_initialize_read_buffers(self);
 		cache_copy_initialize_file_data(self);
 
+#ifdef HALO_XBOX_UWP
+		if (!cache_copy_stop_requested() && !(self->flags & ALL_COPY_FAILURE_FLAGS))
+			cache_copy_run_xbox_buffered(self);
+#else
 		/* port: nor is a bad file (cache_copy_initialize_file_data) read */
 		if (!cache_copy_stop_requested() && !(self->flags & ALL_COPY_FAILURE_FLAGS))
 		{
@@ -1814,6 +1913,7 @@ static unsigned long __stdcall simple_cache_copy_thread(
 		}
 
 		cache_copy_wait_for_async_io(self);
+#endif
 
 		CloseHandle(self->source_file);
 		self->source_file = NULL;

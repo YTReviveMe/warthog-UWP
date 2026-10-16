@@ -159,5 +159,8 @@ platform layer includes the XDK headers itself, via platform.h. */
 /* ---------- MSVC built-in types */
 
 #include <stddef.h>
+#ifdef HALO_XBOX_UWP
+void platform_log(const char *format, ...);
+#endif
 
 #endif /* __HALO_LINUX_PREFIX_H */

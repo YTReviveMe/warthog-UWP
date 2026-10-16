@@ -56,6 +56,37 @@ static void trim_separators(char *path)
 		path[strlen(path) - 1] = '\0';
 }
 
+static BOOL equal_case_insensitive(const char *left, const char *right)
+{
+	while (*left && *right)
+	{
+		if (tolower((unsigned char)*left++) != tolower((unsigned char)*right++))
+			return FALSE;
+	}
+	return !*left && !*right;
+}
+
+static BOOL map_cache_path(const char *path)
+{
+	const char *name = path;
+	size_t length;
+
+	while (*name == '\\' || *name == '/')
+		name++;
+	if (equal_case_insensitive(name, "last_language.dat"))
+		return TRUE;
+	length = strlen(name);
+	if (length != 12)
+		return FALSE;
+	return tolower((unsigned char)name[0]) == 'c' &&
+		tolower((unsigned char)name[1]) == 'a' &&
+		tolower((unsigned char)name[2]) == 'c' &&
+		tolower((unsigned char)name[3]) == 'h' &&
+		tolower((unsigned char)name[4]) == 'e' &&
+		isdigit((unsigned char)name[5]) && isdigit((unsigned char)name[6]) &&
+		isdigit((unsigned char)name[7]) && equal_case_insensitive(name + 8, ".map");
+}
+
 const char *platform_data_root(void)
 {
 	static char root[MAX_PATH];
@@ -255,8 +286,12 @@ void platform_translate_path(const char *xbox_path, char *host_path, unsigned lo
 		if (drive != 'd')
 		{
 			struct posix_file_information information;
+			const char *map_cache_root = getenv("HALO_MAP_CACHE_ROOT");
 
-			snprintf(resolved, sizeof(resolved), "%s/%c", platform_save_root(), drive);
+			if (drive == 'z' && map_cache_root && *map_cache_root && map_cache_path(cursor + 2))
+				snprintf(resolved, sizeof(resolved), "%s", map_cache_root);
+			else
+				snprintf(resolved, sizeof(resolved), "%s/%c", platform_save_root(), drive);
 			/* every Xbox drive always exists; create its directory on first use */
 			if (posix_stat(resolved, &information) != 0)
 				posix_make_directory(resolved);

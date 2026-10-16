@@ -367,7 +367,9 @@ void errors_initialize(
 	error_globals.output_to_debug_file = TRUE;
 	error_globals.overflow_suppression = TRUE;
 	reset_error_state();
+#ifndef HALO_XBOX_UWP
 	stack_walk_initialize();
+#endif
 
 	return;
 }
@@ -426,6 +428,16 @@ void error(
 			va_end(argument_list);
 			csstrcat(string, "\r\n");
 
+#ifdef HALO_XBOX_UWP
+			if (priority == _error_silent || priority == _error_log)
+			{
+				extern void platform_log(char const *format, ...);
+				platform_log("game error priority=%d: %s", priority, string);
+				error_globals.recursion_lock = FALSE;
+				return;
+			}
+#endif
+
 			/* (port: the file first: printing used to halt on a long line
 			while this call still held the lock, and the reason never reached
 			debug.txt) */
@@ -435,9 +447,15 @@ void error(
 			assert that stops the game, and what a command someone typed
 			logs (its answer), always; the rest, the game's chatter.
 			debug.txt has it whatever that is) */
-			if (priority != _error_log &&
+			if (
+#ifndef HALO_XBOX_UWP
+				priority != _error_log &&
 				terminal_shows(terminal_command_running || !strncmp(string, "EXCEPTION halt", 14) ||
-					!strncmp(string, "EXCEPTION assert", 16) ? _terminal_message_serious : _terminal_message_chatter))
+					!strncmp(string, "EXCEPTION assert", 16) ? _terminal_message_serious : _terminal_message_chatter)
+#else
+				FALSE
+#endif
+			)
 			{
 				terminal_printf(global_real_argb_white, "%s", string);
 			}

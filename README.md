@@ -154,6 +154,16 @@ and the options. `xbox360`, `wiiu` and `switch` build the other consoles'
 stubs where their toolchains are installed
 ([docs/consoles.md](docs/consoles.md)).
 
+### Xbox Developer Mode (UWP)
+
+The UWP port runs the 32-bit Warthog game as a guest inside a 64-bit
+AppContainer host. It keeps the original `ninja xbox` target separate and
+uses `ninja uwp_guest` plus a CMake-built host. On first launch it lets the
+player choose internal or removable storage, select a legally owned Halo
+Xbox ISO/XISO, and extracts the required maps once. See
+[port/xboxseries/README.md](port/xboxseries/README.md) for prerequisites, building, packaging and
+storage locations.
+
 ## Help wanted: Windows tooling
 
 Milenko, Warthog's maintainer, doesn't use Windows, so Warthog builds on

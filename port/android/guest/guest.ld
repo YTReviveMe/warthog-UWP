@@ -17,9 +17,11 @@ SECTIONS
 	.rodata : { *(.rodata .rodata.*) }
 	. = ALIGN(0x10000);
 	.data : { *(.data .data.*) }
+	.got : { *(.got .got.* .got.plt) }
 	.guest_init : {
 		__guest_init_start = .;
 		KEEP(*(.guest_init))
+		KEEP(*(.init_array .init_array.*))
 		__guest_init_end = .;
 	}
 	.bss : { *(.bss .bss.*) *(COMMON) }

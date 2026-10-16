@@ -236,7 +236,7 @@ void cinematic_suppress_bsp_object_creation(
 boolean cinematic_in_progress(
 	void)
 {
-	return cinematic_globals->in_progress;
+	return cinematic_globals ? cinematic_globals->in_progress : FALSE;
 }
 
 void cinematic_stop(

@@ -18,6 +18,7 @@ from tools.macos_build import generate_macos_build, macos_configure_inputs
 from tools.server_build import generate_server_build, server_configure_inputs
 from tools.version import commit_inputs
 from tools.windows_build import generate_windows_build, windows_configure_inputs
+from tools.uwp_build import generate_uwp_build, uwp_configure_inputs
 from tools.xbox_build import generate_xbox_build, xbox_configure_inputs
 from tools.xbox360_build import generate_xbox360_build, xbox360_configure_inputs
 from tools.wiiu_build import generate_wiiu_build, wiiu_configure_inputs
@@ -198,6 +199,7 @@ generate_linux_build(n, sln)
 generate_linux64_build(n, sln)
 generate_android_build(n, sln)
 generate_windows_build(n, sln)
+generate_uwp_build(n, sln)
 generate_macos_build(n, sln)
 generate_server_build(n, sln)
 generate_xbox_build(n, sln)
@@ -222,6 +224,7 @@ n.build(
         *linux64_configure_inputs(),
         *android_configure_inputs(),
         *windows_configure_inputs(),
+        *uwp_configure_inputs(),
         *macos_configure_inputs(),
         *server_configure_inputs(),
         *xbox_configure_inputs(),

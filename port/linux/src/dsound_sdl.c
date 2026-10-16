@@ -1145,6 +1145,10 @@ static void mix(float *output, unsigned long frames)
 
 static SDL_AudioStream *audio_stream;
 static BOOL audio_started = FALSE;
+#ifdef HALO_XBOX_UWP
+static pthread_mutex_t audio_output_lock = PTHREAD_MUTEX_INITIALIZER;
+static BOOL audio_device_ready = FALSE;
+#endif
 
 static void SDLCALL audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
@@ -1160,7 +1164,13 @@ static void SDLCALL audio_callback(void *userdata, SDL_AudioStream *stream, int 
 			frames = MIX_CHUNK_FRAMES;
 		if (!frames)
 			frames = 1;
+#ifdef HALO_XBOX_UWP
+		pthread_mutex_lock(&audio_output_lock);
+#endif
 		mix(buffer, frames);
+#ifdef HALO_XBOX_UWP
+		pthread_mutex_unlock(&audio_output_lock);
+#endif
 		SDL_PutAudioStreamData(stream, buffer, (int)(frames * OUTPUT_CHANNELS * sizeof(float)));
 		additional_amount -= (int)(frames * OUTPUT_CHANNELS * sizeof(float));
 	}
@@ -1176,7 +1186,18 @@ static void *silent_clock_thread(void *parameter)
 	clock_gettime(CLOCK_MONOTONIC, &next);
 	for (;;)
 	{
+#ifdef HALO_XBOX_UWP
+		pthread_mutex_lock(&audio_output_lock);
+		if (audio_device_ready)
+		{
+			pthread_mutex_unlock(&audio_output_lock);
+			break;
+		}
+#endif
 		mix(buffer, 480);
+#ifdef HALO_XBOX_UWP
+		pthread_mutex_unlock(&audio_output_lock);
+#endif
 		next.tv_nsec += 10000000L;
 		if (next.tv_nsec >= 1000000000L)
 		{
@@ -1187,6 +1208,35 @@ static void *silent_clock_thread(void *parameter)
 	}
 	return NULL;
 }
+
+#ifdef HALO_XBOX_UWP
+static void *xbox_audio_open_thread(void *parameter)
+{
+	SDL_AudioSpec spec;
+	SDL_AudioStream *stream;
+
+	(void)parameter;
+	spec.format = SDL_AUDIO_F32;
+	spec.channels = OUTPUT_CHANNELS;
+	spec.freq = OUTPUT_RATE;
+	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_callback, NULL);
+	if (!stream)
+	{
+		platform_log("Xbox audio: device open failed (%s); silent clock remains", SDL_GetError());
+		return NULL;
+	}
+	if (!SDL_ResumeAudioStreamDevice(stream))
+	{
+		platform_log("Xbox audio: device resume failed (%s); silent clock remains", SDL_GetError());
+		return NULL;
+	}
+	pthread_mutex_lock(&audio_output_lock);
+	audio_stream = stream;
+	audio_device_ready = TRUE;
+	pthread_mutex_unlock(&audio_output_lock);
+	return NULL;
+}
+#endif
 
 static void audio_start(void)
 {
@@ -1217,6 +1267,15 @@ static void audio_start(void)
 			buffer_frames = 8192;
 		snprintf(frames, sizeof(frames), "%ld", buffer_frames);
 		SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, frames);
+#ifdef HALO_XBOX_UWP
+		{
+			pthread_t worker;
+			if (!pthread_create(&worker, NULL, xbox_audio_open_thread, NULL))
+				pthread_detach(worker);
+			else
+				platform_log("Xbox audio: could not start device worker; silent clock remains");
+		}
+#else
 		audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_callback, NULL);
 		if (audio_stream)
 		{
@@ -1224,6 +1283,7 @@ static void audio_start(void)
 			return;
 		}
 		platform_log("cannot open an audio device (%s); sound is silent", SDL_GetError());
+#endif
 	}
 	{
 		pthread_t thread;

@@ -767,6 +767,7 @@ boolean saved_game_file_retrieve_player1_last_used_profile_directory(
 		directory_path);
 
 	if (file_reference_create_from_path(&file, "z:\\lastprof.txt", FALSE) &&
+		file_exists(&file) &&
 		file_open(&file, FLAG(_permission_read_bit)))
 	{
 		success = file_read(&file, MAXIMUM_FILENAME_LENGTH+1, directory_path);
@@ -780,7 +781,9 @@ boolean saved_game_file_retrieve_player1_last_used_profile_directory(
 	}
 	else
 	{
+#ifndef HALO_ANDROID
 		error(_error_silent, "failed to open '%s'", "z:\\lastprof.txt");
+#endif
 	}
 
 	directory_path[MAXIMUM_FILENAME_LENGTH] = 0;
@@ -829,6 +832,7 @@ boolean saved_game_file_retrieve_last_used_multiplayer_variant_directory(
 		directory_path);
 
 	if (file_reference_create_from_path(&file, "z:\\lastmpvr.txt", FALSE) &&
+		file_exists(&file) &&
 		file_open(&file, FLAG(_permission_read_bit)))
 	{
 		success = file_read(&file, MAXIMUM_FILENAME_LENGTH+1, directory_path);
@@ -842,7 +846,9 @@ boolean saved_game_file_retrieve_last_used_multiplayer_variant_directory(
 	}
 	else
 	{
+#ifndef HALO_ANDROID
 		error(_error_silent, "failed to open '%s'", "z:\\lastmpvr.txt");
+#endif
 	}
 
 	directory_path[MAXIMUM_FILENAME_LENGTH] = 0;
@@ -896,6 +902,7 @@ boolean saved_game_file_retrieve_last_used_multiplayer_map(
 		map_name);
 
 	if (file_reference_create_from_path(&file, "z:\\lastmpmp.txt", FALSE) &&
+		file_exists(&file) &&
 		file_open(&file, FLAG(_permission_read_bit)))
 	{
 		success = file_read(&file, MAXIMUM_FILENAME_LENGTH+1, map_name);
@@ -909,7 +916,9 @@ boolean saved_game_file_retrieve_last_used_multiplayer_map(
 	}
 	else
 	{
+#ifndef HALO_ANDROID
 		error(_error_silent, "failed to open '%s'", "z:\\lastmpmp.txt");
+#endif
 	}
 
 	map_name[MAXIMUM_FILENAME_LENGTH] = 0;

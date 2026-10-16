@@ -36,7 +36,9 @@ HALO_BUILD_FLAVOR.
 #define BUILD_IDENTITY_NAME "ChupathingyCE"
 #endif
 
-#if defined(HALO_ANDROID)
+#if defined(HALO_XBOX_UWP)
+#define BUILD_IDENTITY_PLATFORM "Xbox UWP"
+#elif defined(HALO_ANDROID)
 #define BUILD_IDENTITY_PLATFORM "Android"
 #elif defined(_WIN32)
 #define BUILD_IDENTITY_PLATFORM "Windows"
@@ -47,7 +49,9 @@ HALO_BUILD_FLAVOR.
 #endif
 
 /* (the Android game's code is arm64_32, on an arm64 device) */
-#if defined(__aarch64__) || defined(__arm64__) || defined(HALO_ANDROID)
+#if defined(HALO_XBOX_UWP)
+#define BUILD_IDENTITY_ARCHITECTURE "x64 (x32 guest)"
+#elif defined(__aarch64__) || defined(__arm64__) || defined(HALO_ANDROID)
 #define BUILD_IDENTITY_ARCHITECTURE "arm64"
 #elif defined(__x86_64__) || defined(_M_X64)
 #define BUILD_IDENTITY_ARCHITECTURE "x64"
