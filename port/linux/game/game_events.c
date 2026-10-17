@@ -548,7 +548,7 @@ static void track_player(struct tracked *tracked, struct player_datum *player, l
 	char const *hardware_id = network_game_server_machine_hardware_id(player->network_player_data.machine_index);
 	int platform = delta_peer_player_platform((int)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index));
 	static char const *const platforms[] = { "", "windows", "macos", "linux", "android", "linux", "xbox", "xbox",
-		"other", "other" };
+		"other", "other", "other", "other", "xboxseries" };
 	long index;
 
 	csmemset(tracked, 0, sizeof(*tracked));

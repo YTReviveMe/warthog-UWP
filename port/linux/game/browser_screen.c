@@ -834,9 +834,10 @@ List: a ChupathingyCE host's own word; nothing of an older or OpenCE host) */
 
 /* its platform (delta.h's registry), short for the row's tag and in full
 for the details */
-static char const *const platform_tags[] = { "", "WIN", "MAC", "LNX", "AND", "DECK", "XBOX", "360", "WIIU", "NX" };
+static char const *const platform_tags[] = { "", "WIN", "MAC", "LNX", "AND", "DECK", "XBOX", "360", "WIIU", "NX", "PSP", "VITA", "XS" };
 static char const *const platform_names[] = {
 	"Unknown", "Windows", "Mac", "Linux", "Android", "Steam Deck", "Xbox", "Xbox 360", "Wii U", "Switch",
+	"PSP", "Vita", "XboxSeries",
 };
 
 /* the row's tag before the name: the host's platform, SRV for a dedicated
@@ -888,7 +889,8 @@ static char const *machines_text(
 	without Delta) */
 	static struct { char const *name; unsigned char first, last; } const groups[] = {
 		{ "PC", 1, 3 }, { "Steam Deck", 5, 5 }, { "Android", 4, 4 }, { "Xbox", 6, 6 }, { "Xbox 360", 7, 7 },
-		{ "Wii U", 8, 8 }, { "Switch", 9, 9 }, { "other", 0, 0 }, { "OpenCE", BROWSER_MACHINE_KINDS - 1, BROWSER_MACHINE_KINDS - 1 },
+		{ "Wii U", 8, 8 }, { "Switch", 9, 9 }, { "PSP", 10, 10 }, { "Vita", 11, 11 },
+		{ "XboxSeries", 12, 12 }, { "other", 0, 0 }, { "OpenCE", BROWSER_MACHINE_KINDS - 1, BROWSER_MACHINE_KINDS - 1 },
 	};
 	long used = 0, group;
 

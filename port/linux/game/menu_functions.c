@@ -3693,6 +3693,7 @@ static void lobby_browser_host_text(struct p2p_listing const *game, wchar_t *tex
 {
 	static wchar_t const *const platforms[] = {
 		L"", L"WINDOWS", L"MAC", L"LINUX", L"ANDROID", L"STEAM DECK", L"XBOX", L"XBOX 360", L"WII U", L"SWITCH",
+		L"PSP", L"VITA", L"XBOXSERIES",
 	};
 	struct browser_game const *listed = lobby_browser_listed_game(game);
 	boolean dedicated;
