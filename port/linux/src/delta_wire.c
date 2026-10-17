@@ -1,8 +1,13 @@
+/* SPDX-License-Identifier: CC0-1.0 */
 /*
 DELTA_WIRE.C
 
 Delta Peer's wire format (delta_wire.h). Plain C89, no allocation, no
 platform dependency.
+
+This file stays under CC0 1.0 (LICENSES/CC0-1.0.txt), unlike the rest of
+Chupathingy (GPL-3.0-or-later), so that other clients and servers can
+speak Delta under any license (README.md, "License").
 */
 
 #include "delta_wire.h"

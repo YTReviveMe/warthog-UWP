@@ -1,4 +1,9 @@
+<!-- SPDX-License-Identifier: CC0-1.0 -->
 # Delta: ChupathingyCE's network family
+
+This document stays under [CC0 1.0](../LICENSES/CC0-1.0.txt), unlike the rest of
+Chupathingy (GPL-3.0-or-later), so that other clients and servers can speak
+Delta under any license (README, "License").
 
 Status (October 13, 2026, for 0.7.4e): in progress. Delta List, Stats, Link
 and Control run under the names in the table below; the legacy number's

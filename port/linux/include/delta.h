@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: CC0-1.0 */
 /*
 DELTA.H
 
@@ -14,6 +15,10 @@ format is port/linux/src/delta_wire.h; its sessions are delta_peer.c.
 
 Plain C89 (no // comments, no stdint.h): Warthog (the Xbox build, MSVC 7.1)
 reads this header too.
+
+This file stays under CC0 1.0 (LICENSES/CC0-1.0.txt), unlike the rest of
+Chupathingy (GPL-3.0-or-later), so that other clients and servers can
+speak Delta under any license (README.md, "License").
 */
 
 #ifndef HALO_DELTA_H

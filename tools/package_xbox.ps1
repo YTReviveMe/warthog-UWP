@@ -39,6 +39,50 @@ $assets = Join-Path $BuildDirectory 'xbox-assets'
 & powershell -NoProfile -ExecutionPolicy Bypass -File `
     (Join-Path $sourceRoot 'tools\generate_xbox_assets.ps1') -OutputDirectory $assets
 
+$cache = Join-Path $BuildDirectory 'CMakeCache.txt'
+$dependencyEntry = Select-String -LiteralPath $cache -Pattern '^UWP_DEPS:PATH=(.+)$' | Select-Object -First 1
+if (-not $dependencyEntry) {
+    throw 'UWP dependency path was not found in CMakeCache.txt.'
+}
+$dependencyLicenses = Join-Path $dependencyEntry.Matches[0].Groups[1].Value 'lic'
+$dependencyNotices = @(
+    'DXIL-LICENSE.txt', 'LIBUWP-LICENSE.txt', 'MESA-LICENSE.rst', 'ZLIB-LICENSE.txt'
+)
+$sourceNotices = [ordered]@{
+    'LICENSE' = 'LICENSE.txt'
+    'README.md' = 'Warthog-README.md'
+    'LICENSES\CC0-1.0.txt' = 'CC0-1.0.txt'
+    'port\assets\fonts\Newtown-LICENSE.txt' = 'Newtown-LICENSE.txt'
+    'port\assets\fonts\Overpass-OFL.txt' = 'Overpass-OFL.txt'
+    'port\linux\ui\fonts\OFL.txt' = 'NotoSans-OFL.txt'
+    'port\linux\ui\fonts\KENNEY-CC0.txt' = 'Kenney-Input-Prompts-CC0.txt'
+    'port\third_party\expat\COPYING' = 'expat-COPYING.txt'
+    'port\third_party\extract-xiso\LICENSE.TXT' = 'extract-xiso-LICENSE.txt'
+    'port\third_party\kcp\LICENSE' = 'kcp-LICENSE.txt'
+    'port\third_party\mbedtls\LICENSE' = 'mbedtls-LICENSE.txt'
+    'port\third_party\miniupnpc\LICENSE' = 'miniupnpc-LICENSE.txt'
+    'port\third_party\monocypher\LICENCE.md' = 'monocypher-LICENCE.md'
+    'port\third_party\qrcodegen\LICENSE' = 'qrcodegen-LICENSE.txt'
+    'port\third_party\smaa\LICENSE' = 'smaa-LICENSE.txt'
+    'port\third_party\stb\LICENSE' = 'stb-LICENSE.txt'
+    'port\third_party\tomlc17\LICENSE' = 'tomlc17-LICENSE.txt'
+    'port\xboxseries\third_party\imgui\LICENSE.txt' = 'imgui-LICENSE.txt'
+}
+foreach ($notice in $sourceNotices.Keys) {
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $notice))) {
+        throw "Missing source notice: $notice"
+    }
+}
+foreach ($notice in $dependencyNotices) {
+    if (-not (Test-Path -LiteralPath (Join-Path $dependencyLicenses $notice))) {
+        throw "Missing dependency notice: $notice"
+    }
+}
+$sdlLicense = Join-Path $BuildDirectory 'sdl3-LICENSE.txt'
+if (-not (Test-Path -LiteralPath $sdlLicense)) {
+    throw 'Missing SDL3 license.'
+}
+
 $makeAppx = Get-ChildItem -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin') `
     -Recurse -Filter MakeAppx.exe |
     Where-Object FullName -match '\\x64\\MakeAppx.exe$' |
@@ -62,16 +106,14 @@ try {
     $networkAssets = Join-Path $stage 'Warthog\network'
     New-Item -ItemType Directory -Path $networkAssets | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'port\assets\network\brokers.txt') -Destination $networkAssets
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'port\assets\fonts\Newtown-LICENSE.txt') `
-        -Destination (Join-Path $stage 'Newtown-LICENSE.txt')
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'port\third_party\extract-xiso\LICENSE.TXT') `
-        -Destination (Join-Path $stage 'extract-xiso-LICENSE.txt')
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'port\xboxseries\third_party\imgui\LICENSE.txt') `
-        -Destination (Join-Path $stage 'imgui-LICENSE.txt')
-    $sdlLicense = Join-Path $BuildDirectory 'sdl3-LICENSE.txt'
-    if (Test-Path -LiteralPath $sdlLicense) {
-        Copy-Item -LiteralPath $sdlLicense -Destination $stage
+    foreach ($notice in $sourceNotices.Keys) {
+        Copy-Item -LiteralPath (Join-Path $sourceRoot $notice) `
+            -Destination (Join-Path $stage $sourceNotices[$notice])
     }
+    foreach ($notice in $dependencyNotices) {
+        Copy-Item -LiteralPath (Join-Path $dependencyLicenses $notice) -Destination $stage
+    }
+    Copy-Item -LiteralPath $sdlLicense -Destination $stage
 
     if (Test-Path -LiteralPath $OutputPath) {
         Remove-Item -LiteralPath $OutputPath

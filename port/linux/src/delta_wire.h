@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: CC0-1.0 */
 /*
 DELTA_WIRE.H
 
@@ -11,6 +12,10 @@ without raising the major.
 Plain C89 with no platform dependency (no stdint.h, no snprintf), so the
 fuzz harness (port/linux/tests/delta_fuzz.c), the dedicated server and
 Warthog's old toolchain build it as it is. Numbers are little-endian.
+
+This file stays under CC0 1.0 (LICENSES/CC0-1.0.txt), unlike the rest of
+Chupathingy (GPL-3.0-or-later), so that other clients and servers can
+speak Delta under any license (README.md, "License").
 */
 
 #ifndef HALO_DELTA_WIRE_H

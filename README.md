@@ -7,7 +7,7 @@
 <p align="center">
 <a href="https://github.com/ChupathingyCE/chupathingyce">ChupathingyCE</a> ·
 <a href="https://halo.milenko.org">Games online now</a> ·
-<a href="https://discord.gg/4BUm2FwuCB">Discord</a>
+<a href="https://discord.gg/chupathingy">Discord</a>
 </p>
 
 > Warthog follows ChupathingyCE: the shared game code comes from there, and this repository adds only the consoles' own code. You need your own copy of Halo; no SDK or game files are included.
@@ -177,7 +177,7 @@ the Xbox's Windows tools, we'd love your help to set up and document:
 - debugging through XBDM on a development kit;
 - a Windows CI job or a written build recipe that others can follow.
 
-Say hello in #warthog-dev on the [Discord](https://discord.gg/4BUm2FwuCB)
+Say hello in #warthog-dev on the [Discord](https://discord.gg/chupathingy)
 so we can coordinate, and see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Testing
@@ -232,6 +232,60 @@ ChupathingyCE's code with the console's switches kept, and `ninja xbox`,
 the desktop builds and the host tests must pass. Each console switch
 Warthog keeps in a shared file is work at every merge.
 
+## License
+
+Warthog is free software: you can redistribute it and modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License or (at your option) any later
+version (`GPL-3.0-or-later`), with the console SDK permission below. It comes
+with no warranty. The full text is in [LICENSE](LICENSE).
+
+- **From this change onward.** Warthog follows ChupathingyCE, which is GPL
+  from release 0.8.0. The source at every commit before the change was
+  released under [CC0 1.0](LICENSES/CC0-1.0.txt) and stays that way.
+- **What Warthog builds on.** The Halo CE decompilation
+  ([punpckhdq/halo](https://github.com/punpckhdq/halo) and
+  [bnunu/halo-1](https://github.com/bnunu/halo-1)) and OpenCE are released
+  under CC0 1.0, which lets anyone build on them under any terms. Their
+  repositories stay CC0.
+- **Third-party code, fonts and art** keep their own licenses, which are
+  beside them (`port/third_party`, `port/assets/fonts`,
+  `port/linux/ui/fonts`, `port/assets/prompts`).
+- **Halo itself is not covered.** The license covers the work of Warthog's
+  and ChupathingyCE's authors. It gives no rights in Halo, its maps or
+  anything else Microsoft owns, and no SDK is included.
+
+### Delta's wire format stays CC0
+
+So that other clients and servers can speak Delta under any license, these
+files stay under [CC0 1.0](LICENSES/CC0-1.0.txt), as each one says at its
+top: [docs/delta.md](docs/delta.md), `port/linux/src/delta_wire.c`,
+`port/linux/src/delta_wire.h` and `port/linux/include/delta.h` (the numbers
+the wire format uses). Everything else is GPL.
+
+### Console SDK permission
+
+You may build Warthog yourself with a console maker's SDK (see "Building it
+yourself"), and share what you build:
+
+> **Additional permission under GNU GPL version 3 section 7**
+>
+> If you modify this Program, or any covered work, by linking or combining
+> it with the libraries of a Microsoft Xbox or Xbox 360 software development
+> kit (such as the Xbox Development Kit and the Xbox 360 SDK, including
+> their `xnet.lib` and Direct3D libraries), or a modified version of those
+> libraries, containing parts covered by the terms of those kits' licenses,
+> the licensors of this Program grant you additional permission to convey
+> the resulting work. Corresponding Source for a non-source form of such a
+> combination shall include the source code of the covered work, and need
+> not include the source code of those libraries.
+
+The permission only lifts the GPL's own objection. It grants no rights in
+Microsoft's libraries, whose own terms still apply, and you may remove it
+from your copies (section 7). Warthog's own published builds are made only
+with free, legally available tools and libraries; none contains code from
+Microsoft's SDKs.
+
 ## Credits
 
 - The decompilation: [punpckhdq/halo](https://github.com/punpckhdq/halo) and
@@ -256,4 +310,5 @@ Warthog keeps in a shared file is work at every merge.
 
 Halo is a trademark of Microsoft. Warthog is a fan project, not made or
 endorsed by Microsoft, Bungie or 343 Industries, and includes none of the
-game's content. The code is released under [CC0](LICENSE.md).
+game's content. The code is released under the GNU GPL, version 3 or later
+(see [License](#license)).

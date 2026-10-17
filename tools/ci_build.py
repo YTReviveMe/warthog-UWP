@@ -170,6 +170,9 @@ def main() -> int:
                     *sorted((ROOT / "build/windows/third_party").glob(f"SDL3-*/lib/{sdl_arch}/SDL3.pdb"))]:
             shutil.copy2(pdb, symbols)
             print(f"{pdb.relative_to(ROOT)} -> {symbols.relative_to(ROOT)}", flush=True)
+    # Chupathingy's own license (GPL-3.0-or-later), which asks every copy to
+    # carry it
+    shutil.copy2(ROOT / "LICENSE", dist / "LICENSE.txt")
     # the disc image readers (port/linux/src/xiso.c, and the Android app's
     # XisoExtractor.java) follow extract-xiso, whose license asks binaries
     # to carry its notice
@@ -235,8 +238,8 @@ def strip_debug(program: Path) -> None:
 
 def server_dist(platform: str, config: str, output: str) -> int:
     """dist/chupathingyce-server-linux-<arch>[-debug]: the server, its
-    README, its playlists, its blocked names list and the notices its parts'
-    licenses ask for"""
+    README, its playlists, its blocked names list, its license and the notices
+    its parts' licenses ask for"""
     arch = platform[len("server-"):]
     dist = ROOT / "dist" / f"chupathingyce-server-linux-{arch}{'' if config == 'release' else '-debug'}"
     if dist.exists():
@@ -253,7 +256,8 @@ def server_dist(platform: str, config: str, output: str) -> int:
         shutil.copy2(playlist, dist / "playlists")
     # (sv_name_filter's list, read from the data folder)
     shutil.copy2(ROOT / "server/blocked_names.txt", dist / "blocked_names.txt")
-    for source, name in (("port/third_party/mbedtls/LICENSE", "mbedtls-LICENSE.txt"),
+    for source, name in (("LICENSE", "LICENSE.txt"),
+                         ("port/third_party/mbedtls/LICENSE", "mbedtls-LICENSE.txt"),
                          ("port/third_party/miniupnpc/LICENSE", "miniupnpc-LICENSE.txt"),
                          ("port/third_party/expat/COPYING", "expat-COPYING.txt"),
                          ("port/third_party/extract-xiso/LICENSE.TXT", "extract-xiso-LICENSE.txt"),

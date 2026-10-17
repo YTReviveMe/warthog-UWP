@@ -24,3 +24,4 @@ Internal installations use `LocalState/Warthog`. External installations use the 
 Xbox maps belong in `Warthog\maps`. Put Custom Edition `.map` files and their `bitmaps.map`, `sounds.map` and `loc.map` resource files in `Warthog\custom_maps`.
 
 No retail game data is included. Upstream licensing and third-party notices remain applicable.
+The APPX includes Warthog's GPL license, console SDK permission in the Warthog README, and the bundled dependencies' notices.
