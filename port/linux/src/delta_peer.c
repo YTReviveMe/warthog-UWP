@@ -51,7 +51,7 @@ static const char *platform_name(int platform)
 {
 	static const char *const names[NUMBER_OF_DELTA_PLATFORMS] = {
 		"unknown", "pc_windows", "pc_macos", "pc_linux", "android", "steam_deck", "xbox", "xbox360", "wiiu",
-		"switch", "psp", "vita", "xboxseries"
+		"switch", "psp", "vita", "xbox_uwp"
 	};
 
 	return platform >= 0 && platform < NUMBER_OF_DELTA_PLATFORMS ? names[platform] : "unknown";

@@ -88,7 +88,7 @@ static int same_word(const char *a, const char *b)
 static int local_platform(void)
 {
 #if defined(HALO_UWP_PC)
-	return _delta_platform_xboxseries;
+	return _delta_platform_xbox_uwp;
 #elif defined(_WIN32)
 	/* (the Windows build under Proton on the Deck: Steam sets SteamDeck=1
 	there too) */
@@ -671,7 +671,7 @@ int delta_peer_game_client_state(void)
 
 static const char *const platform_names[NUMBER_OF_DELTA_PLATFORMS] = {
 	"unknown", "pc_windows", "pc_macos", "pc_linux", "android", "steam_deck", "xbox", "xbox360", "wiiu", "switch",
-	"psp", "vita", "xboxseries"
+	"psp", "vita", "xbox_uwp"
 };
 
 const char *delta_peer_platform_name(int platform)

@@ -98,7 +98,7 @@ enum delta_platform
 	_delta_platform_switch = 9,
 	_delta_platform_psp = 10,
 	_delta_platform_vita = 11,
-	_delta_platform_xboxseries = 12,
+	_delta_platform_xbox_uwp = 12,
 
 	NUMBER_OF_DELTA_PLATFORMS
 };
@@ -161,7 +161,7 @@ legacy table's "platform_policy" section is to tune them without a release
 	X(_delta_platform_switch, 16, 16, 128, 12, 1) \
 	X(_delta_platform_psp, 128, 128, 128, 0, 1) \
 	X(_delta_platform_vita, 128, 128, 128, 0, 1) \
-	X(_delta_platform_xboxseries, 128, 128, 128, 11, 1)
+	X(_delta_platform_xbox_uwp, 128, 128, 128, 11, 1)
 
 /* ---------- the legacy number */
 
