@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,9 @@ struct file_entry {
 enum class browse_action { internal, external, child, parent };
 
 struct launcher_state {
+    std::filesystem::path internal_root;
+    std::filesystem::path internal_folder;
+    bool internal_browse = false;
     StorageFolder folder{nullptr};
     std::vector<file_entry> entries;
     std::string current_folder_path;
@@ -65,6 +69,34 @@ bool is_image_name(const hstring &name) {
     return extension == L".iso" || extension == L".xiso";
 }
 
+void list_internal_folder(const std::shared_ptr<launcher_state> &state, const std::filesystem::path &folder) {
+    if (folder.lexically_normal() != state->internal_root.lexically_normal() &&
+        !path_is_within(folder, state->internal_root))
+        throw std::runtime_error("Folder is outside internal storage.");
+    std::error_code error;
+    std::vector<file_entry> entries;
+    for (std::filesystem::directory_iterator item(folder, error), end; item != end && !error; item.increment(error)) {
+        const bool is_folder = item->is_directory(error);
+        if (error)
+            break;
+        if (is_folder || is_image_name(hstring(item->path().filename().wstring())))
+            entries.push_back({to_string(hstring(item->path().filename().wstring())),
+                               to_string(hstring(item->path().wstring())), is_folder});
+    }
+    if (error)
+        throw std::runtime_error(error.message());
+    std::sort(entries.begin(), entries.end(), [](const file_entry &left, const file_entry &right) {
+        if (left.folder != right.folder)
+            return left.folder > right.folder;
+        return left.name < right.name;
+    });
+    state->folder = nullptr;
+    state->internal_folder = folder;
+    state->internal_browse = true;
+    state->current_folder_path = to_string(hstring(folder.wstring()));
+    state->entries = std::move(entries);
+}
+
 Windows::Foundation::IAsyncAction list_folder(const std::shared_ptr<launcher_state> &state, StorageFolder folder) {
     const auto items = co_await folder.GetItemsAsync();
     std::vector<file_entry> entries;
@@ -84,20 +116,14 @@ Windows::Foundation::IAsyncAction list_folder(const std::shared_ptr<launcher_sta
 }
 
 Windows::Foundation::IAsyncAction select_file(const std::shared_ptr<launcher_state> &state, StorageFile file) {
-    const auto local_folder = ApplicationData::Current().LocalFolder();
-    const auto file_path = std::filesystem::path(file.Path().c_str());
     StorageFolder destination{nullptr};
-    if (path_is_within(file_path, std::filesystem::path(local_folder.Path().c_str()))) {
-        destination = co_await local_folder.CreateFolderAsync(L"Warthog", CreationCollisionOption::OpenIfExists);
-    } else {
-        const auto parent = co_await file.GetParentAsync();
-        if (!parent)
-            throw hresult_error(E_FAIL, L"The selected image's folder is unavailable.");
-        destination = _wcsicmp(parent.Name().c_str(), L"Warthog") == 0
-                          ? parent
-                          : co_await parent.CreateFolderAsync(L"Warthog", CreationCollisionOption::OpenIfExists);
-        StorageApplicationPermissions::FutureAccessList().AddOrReplace(data_access_token, destination);
-    }
+    const auto parent = co_await file.GetParentAsync();
+    if (!parent)
+        throw hresult_error(E_FAIL, L"The selected image's folder is unavailable.");
+    destination = _wcsicmp(parent.Name().c_str(), L"Warthog") == 0
+                      ? parent
+                      : co_await parent.CreateFolderAsync(L"Warthog", CreationCollisionOption::OpenIfExists);
+    StorageApplicationPermissions::FutureAccessList().AddOrReplace(data_access_token, destination);
     co_await destination.CreateFolderAsync(L"custom_maps", CreationCollisionOption::OpenIfExists);
     state->selected_image_path = to_string(file.Path());
     state->destination_path = to_string(destination.Path());
@@ -107,12 +133,16 @@ Windows::Foundation::IAsyncAction select_file(const std::shared_ptr<launcher_sta
 fire_and_forget browse(const std::shared_ptr<launcher_state> &state, browse_action action, std::string name = {}) {
     state->busy = true;
     state->error_message.clear();
+    if (action == browse_action::internal || action == browse_action::external) {
+        state->selected_image_path.clear();
+        state->destination_path.clear();
+    }
     try {
         StorageFolder folder{nullptr};
         if (action == browse_action::internal) {
-            folder = co_await ApplicationData::Current().LocalFolder().CreateFolderAsync(
-                L"Warthog", CreationCollisionOption::OpenIfExists);
+            list_internal_folder(state, state->internal_root);
         } else if (action == browse_action::external) {
+            state->internal_browse = false;
             const auto drives = KnownFolders::RemovableDevices();
             const auto roots = co_await drives.GetFoldersAsync();
             for (const auto &root : roots) {
@@ -129,9 +159,15 @@ fire_and_forget browse(const std::shared_ptr<launcher_state> &state, browse_acti
                 state->error_message = "No USB storage was found. Connect a media-formatted drive and try again.";
             }
         } else if (action == browse_action::child) {
-            folder = co_await state->folder.GetFolderAsync(to_hstring(name));
+            if (state->internal_browse)
+                list_internal_folder(state, state->internal_folder / to_hstring(name).c_str());
+            else
+                folder = co_await state->folder.GetFolderAsync(to_hstring(name));
         } else if (action == browse_action::parent) {
-            folder = co_await state->folder.GetParentAsync();
+            if (state->internal_browse)
+                list_internal_folder(state, state->internal_folder.parent_path());
+            else
+                folder = co_await state->folder.GetParentAsync();
         }
         if (folder)
             co_await list_folder(state, folder);
@@ -147,8 +183,14 @@ fire_and_forget choose_entry(const std::shared_ptr<launcher_state> &state, file_
     state->busy = true;
     state->error_message.clear();
     try {
-        const auto file = co_await StorageFile::GetFileFromPathAsync(to_hstring(entry.path));
-        co_await select_file(state, file);
+        if (state->internal_browse) {
+            state->selected_image_path = entry.path;
+            state->destination_path = to_string(hstring(state->internal_root.wstring()));
+            state->focus_install = true;
+        } else {
+            const auto file = co_await StorageFile::GetFileFromPathAsync(to_hstring(entry.path));
+            co_await select_file(state, file);
+        }
     } catch (const hresult_error &error) {
         state->error_message = to_string(error.message());
     } catch (const std::exception &error) {
@@ -179,10 +221,9 @@ void style_launcher(float scale) {
 }
 } // namespace
 
-bool xbox_show_setup_ui(const std::filesystem::path &local_root, std::filesystem::path &image,
+bool xbox_show_setup_ui(const std::filesystem::path &internal_root, std::filesystem::path &image,
                         std::filesystem::path &destination, std::string &error) {
     error.clear();
-    (void)local_root;
     int screen_width = 1920;
     int screen_height = 1080;
     const auto device_family = Windows::System::Profile::AnalyticsInfo::VersionInfo().DeviceFamily();
@@ -254,6 +295,7 @@ bool xbox_show_setup_ui(const std::filesystem::path &local_root, std::filesystem
     }
 
     auto state = std::make_shared<launcher_state>();
+    state->internal_root = internal_root;
     browse(state, browse_action::internal);
     bool quit = false;
     while (!quit && !state->install) {
@@ -313,7 +355,8 @@ bool xbox_show_setup_ui(const std::filesystem::path &local_root, std::filesystem
             ImGui::SameLine();
             if (ImGui::Button("External Storage", ImVec2(half, 38.0f * ui_scale)))
                 browse(state, browse_action::external);
-            ImGui::BeginDisabled(!state->folder);
+            ImGui::BeginDisabled(state->internal_browse ? state->internal_folder == state->internal_root
+                                                         : !state->folder);
             if (ImGui::Button("Up one folder", ImVec2(-1.0f, 34.0f * ui_scale)))
                 browse(state, browse_action::parent);
             ImGui::EndDisabled();

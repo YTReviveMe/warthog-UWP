@@ -410,10 +410,11 @@ bool extract_maps(const image_candidate &candidate, std::string &error) {
 
 } // namespace
 
-bool xbox_install_game_data(const std::filesystem::path &local_root, std::filesystem::path &installed_root) {
+bool xbox_install_game_data(const std::filesystem::path &local_root, const std::filesystem::path &internal_root,
+                            std::filesystem::path &installed_root) {
     image_candidate candidate;
     std::string error;
-    if (!xbox_show_setup_ui(local_root, candidate.image, candidate.destination, error)) {
+    if (!xbox_show_setup_ui(internal_root, candidate.image, candidate.destination, error)) {
         if (!error.empty())
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Warthog setup could not start", error.c_str(), nullptr);
         return false;
@@ -439,7 +440,7 @@ bool xbox_restore_game_data(const std::filesystem::path &local_root, std::filesy
     std::getline(record, saved);
     if (!saved.empty()) {
         auto root = std::filesystem::path(winrt::to_hstring(saved).c_str());
-        if (has_maps(root)) {
+        if (has_maps(root) && !std::filesystem::exists(root / L".localstate-migration.pending")) {
             installed_root = std::move(root);
             host_logf(HOST_LOG_INFO, "installer: restored remembered data root %s", saved.c_str());
             return true;

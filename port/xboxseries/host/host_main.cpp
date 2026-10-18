@@ -16,6 +16,7 @@
 #include <vector>
 #include <windows.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.System.Profile.h>
 #include <zlib.h>
 
 static std::mutex log_mutex;
@@ -30,6 +31,68 @@ static bool same_path(const std::filesystem::path &left, const std::filesystem::
     while (b.size() > 3 && (b.back() == L'\\' || b.back() == L'/'))
         b.pop_back();
     return _wcsicmp(a.c_str(), b.c_str()) == 0;
+}
+
+static bool development_root_available(const std::filesystem::path &root) {
+    std::error_code error;
+    if (!std::filesystem::is_directory(root.parent_path(), error))
+        return false;
+    std::filesystem::create_directories(root, error);
+    if (error)
+        return false;
+    const auto probe = root / (L".write-probe-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                               std::to_wstring(GetTickCount64()));
+    std::ofstream file(probe, std::ios::binary | std::ios::trunc);
+    if (!file)
+        return false;
+    file.put('W');
+    file.close();
+    if (!file)
+        return false;
+    std::filesystem::remove(probe, error);
+    return !error;
+}
+
+static bool migrate_internal_storage(const std::filesystem::path &old_root, const std::filesystem::path &new_root) {
+    std::error_code error;
+    const auto pending = new_root / L".localstate-migration.pending";
+    std::ofstream marker(pending, std::ios::trunc);
+    if (!marker)
+        return false;
+    marker.close();
+    for (std::filesystem::recursive_directory_iterator item(old_root, error), end; item != end && !error;
+         item.increment(error)) {
+        const auto relative = item->path().lexically_relative(old_root);
+        if (relative == L"selected-data-root.txt" || relative == L"warthog.log")
+            continue;
+        const auto target = new_root / relative;
+        if (item->is_directory(error)) {
+            std::filesystem::create_directories(target, error);
+        } else if (item->is_regular_file(error)) {
+            std::filesystem::create_directories(target.parent_path(), error);
+            if (!error) {
+                const bool existing = std::filesystem::is_regular_file(target, error);
+                if (!error) {
+                    const auto options = existing && std::filesystem::file_size(target, error) != item->file_size(error)
+                                             ? std::filesystem::copy_options::overwrite_existing
+                                             : std::filesystem::copy_options::skip_existing;
+                    if (!error)
+                        std::filesystem::copy_file(item->path(), target, options, error);
+                }
+            }
+        }
+        if (error)
+            break;
+    }
+    if (error || !std::filesystem::is_regular_file(new_root / L"maps" / L"ui.map", error)) {
+        host_logf(HOST_LOG_WARN, "internal storage migration incomplete: %s", error.message().c_str());
+        return false;
+    }
+    std::filesystem::remove(pending, error);
+    if (error)
+        return false;
+    host_logf(HOST_LOG_INFO, "internal storage migrated to %s", winrt::to_string(new_root.wstring()).c_str());
+    return true;
 }
 
 static void copy_missing_tree(const std::filesystem::path &source, const std::filesystem::path &destination) {
@@ -329,8 +392,18 @@ extern "C" int SDL_main(int, char **) {
     auto local_cache_w = winrt::Windows::Storage::ApplicationData::Current().LocalCacheFolder().Path();
     std::filesystem::path local(local_w.c_str());
     std::filesystem::path local_cache(local_cache_w.c_str());
-    std::filesystem::path internal = local / L"Warthog";
-    open_log_at(internal);
+    const std::filesystem::path legacy_internal = local / L"Warthog";
+    std::filesystem::path internal = legacy_internal;
+    open_log_at(legacy_internal);
+    const bool xbox_device =
+        winrt::Windows::System::Profile::AnalyticsInfo::VersionInfo().DeviceFamily() == L"Windows.Xbox";
+    const std::filesystem::path development_root = LR"(D:\DevelopmentFiles\Warthog)";
+    if (xbox_device) {
+        if (development_root_available(development_root))
+            internal = development_root;
+        else
+            host_logf(HOST_LOG_WARN, "D:\\DevelopmentFiles is not writable; using LocalState");
+    }
     std::error_code internal_maps_error;
     std::filesystem::create_directories(internal / L"custom_maps", internal_maps_error);
     if (internal_maps_error)
@@ -350,26 +423,38 @@ extern "C" int SDL_main(int, char **) {
     }
 
     std::vector<std::filesystem::path> data_roots{internal};
+    if (!same_path(internal, legacy_internal))
+        data_roots.push_back(legacy_internal);
     for (wchar_t drive = L'D'; drive <= L'Z'; ++drive) {
+        if (xbox_device && drive == L'D' && !same_path(internal, development_root))
+            continue;
         std::wstring path{drive, L':', L'\\'};
         std::filesystem::path root = std::filesystem::path(path) / L"Warthog";
         std::error_code error;
-        if (std::filesystem::is_directory(root, error))
+        if (!same_path(root, internal) && std::filesystem::is_directory(root, error))
             data_roots.push_back(std::move(root));
     }
     std::filesystem::path selected_data;
-    xbox_restore_game_data(internal, selected_data);
+    xbox_restore_game_data(legacy_internal, selected_data);
+    if (xbox_device && !same_path(internal, development_root) && same_path(selected_data, development_root))
+        selected_data.clear();
     if (selected_data.empty()) {
         for (const auto &root : data_roots) {
-            if (has_maps(root)) {
+            std::error_code migration_error;
+            if (has_maps(root) && !std::filesystem::exists(root / L".localstate-migration.pending", migration_error)) {
                 selected_data = root;
-                xbox_remember_game_data(internal, selected_data);
+                xbox_remember_game_data(legacy_internal, selected_data);
                 break;
             }
         }
     }
+    if (same_path(selected_data, legacy_internal) && !same_path(internal, legacy_internal) &&
+        has_maps(legacy_internal) && migrate_internal_storage(legacy_internal, internal)) {
+        selected_data = internal;
+        xbox_remember_game_data(legacy_internal, selected_data);
+    }
     if (selected_data.empty()) {
-        const bool installed = xbox_install_game_data(internal, selected_data);
+        const bool installed = xbox_install_game_data(legacy_internal, internal, selected_data);
         uwp_SetScreenSize(physical_width, physical_height);
         host_sdl_set_backbuffer_size(physical_width, physical_height);
         if (!installed)
@@ -380,7 +465,7 @@ extern "C" int SDL_main(int, char **) {
         SDL_ShowSimpleMessageBox(
             SDL_MESSAGEBOX_ERROR, "Warthog game data needed",
             "Game setup was not completed. Restart Warthog and choose your legally owned Halo .iso/.xiso, or "
-            "provide an existing maps folder in LocalState\\Warthog or USB:\\Warthog.",
+            "provide an existing maps folder in D:\\DevelopmentFiles\\Warthog or USB:\\Warthog.",
             NULL);
         return 2;
     }
@@ -391,7 +476,7 @@ extern "C" int SDL_main(int, char **) {
             host_logf(HOST_LOG_WARN, "could not create %ls at %s: %s", folder,
                       winrt::to_string(selected_data.wstring()).c_str(), folder_error.message().c_str());
     }
-    prepare_portable_storage(internal, selected_data);
+    prepare_portable_storage(has_maps(internal) ? internal : legacy_internal, selected_data);
     const bool portable = !same_path(internal, selected_data);
     const auto writable_root = portable ? selected_data : internal;
     if (portable) {
@@ -401,7 +486,9 @@ extern "C" int SDL_main(int, char **) {
     std::error_code save_error;
     std::filesystem::create_directories(writable_root / L"save", save_error);
     const auto map_cache_root = writable_root / L"map_cache";
-    const auto shader_cache_root = local_cache / L"Warthog" / L"shader_cache";
+    const auto shader_cache_root = same_path(writable_root, internal) && !same_path(internal, legacy_internal)
+                                       ? internal / L"shader_cache"
+                                       : local_cache / L"Warthog" / L"shader_cache";
     std::error_code map_cache_error;
     std::error_code shader_cache_error;
     std::filesystem::create_directories(map_cache_root, map_cache_error);

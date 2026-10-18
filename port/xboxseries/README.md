@@ -19,7 +19,11 @@ SDL3 must link against the Visual C++ `lib/x64/store` import libraries, not the 
 
 Select internal or external storage on first launch and browse to a legally owned Halo Xbox ISO or XISO. Extraction is performed once and the installation is remembered.
 
-Internal installations use `LocalState/Warthog`. External installations use the drive's `Warthog` folder. Saves, settings, map caches and logs stay with the selected installation. The shader cache uses the app's local cache storage.
+On Xbox, internal installations use `D:\DevelopmentFiles\Warthog`. Put the ISO or XISO there for first-boot setup. External installations use the drive's `Warthog` folder. Saves, settings, map caches and logs stay with the selected installation. Internal installations also keep the shader cache there.
+
+The app retains its installation-selection record in LocalState. If the development folder is not writable, the app falls back to `LocalState/Warthog`.
+
+Existing internal installations are copied from LocalState to the development folder on startup. The original files are left in place. External installations are unchanged.
 
 Xbox maps belong in `Warthog\maps`. Put Custom Edition `.map` files and their `bitmaps.map`, `sounds.map` and `loc.map` resource files in `Warthog\custom_maps`.
 
