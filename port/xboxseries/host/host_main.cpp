@@ -393,23 +393,24 @@ extern "C" int SDL_main(int, char **) {
     std::filesystem::path local(local_w.c_str());
     std::filesystem::path local_cache(local_cache_w.c_str());
     const std::filesystem::path legacy_internal = local / L"Warthog";
-    std::filesystem::path internal = legacy_internal;
-    open_log_at(legacy_internal);
     const bool xbox_device =
         winrt::Windows::System::Profile::AnalyticsInfo::VersionInfo().DeviceFamily() == L"Windows.Xbox";
     const std::filesystem::path development_root = LR"(D:\DevelopmentFiles\Warthog)";
-    if (xbox_device) {
-        if (development_root_available(development_root))
-            internal = development_root;
-        else
-            host_logf(HOST_LOG_WARN, "D:\\DevelopmentFiles is not writable; using LocalState");
+    const std::filesystem::path internal = xbox_device ? development_root : legacy_internal;
+    if (xbox_device && !development_root_available(internal)) {
+        host_logf(HOST_LOG_ERROR, "D:\\DevelopmentFiles\\Warthog is unavailable or not writable");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Warthog storage unavailable",
+                                 "D:\\DevelopmentFiles\\Warthog is unavailable or not writable. "
+                                 "Check the Xbox Developer Mode storage and restart Warthog.", nullptr);
+        return 2;
     }
+    open_log_at(internal);
     std::error_code internal_maps_error;
-    std::filesystem::create_directories(internal / L"custom_maps", internal_maps_error);
+    std::filesystem::create_directories(internal / L"maps_ce", internal_maps_error);
     if (internal_maps_error)
-        host_logf(HOST_LOG_WARN, "could not create internal custom_maps: %s", internal_maps_error.message().c_str());
+        host_logf(HOST_LOG_WARN, "could not create internal maps_ce: %s", internal_maps_error.message().c_str());
     SetUnhandledExceptionFilter(log_unhandled_exception);
-    host_logf(HOST_LOG_INFO, "Warthog UWP 0.7.5 starting");
+    host_logf(HOST_LOG_INFO, "Warthog UWP starting");
     SDL_SetHint(SDL_HINT_JOYSTICK_WGI, "1");
     SDL_SetHint(SDL_HINT_XINPUT_ENABLED, "0");
     int physical_width = 1920, physical_height = 1080;
@@ -426,8 +427,6 @@ extern "C" int SDL_main(int, char **) {
     if (!same_path(internal, legacy_internal))
         data_roots.push_back(legacy_internal);
     for (wchar_t drive = L'D'; drive <= L'Z'; ++drive) {
-        if (xbox_device && drive == L'D' && !same_path(internal, development_root))
-            continue;
         std::wstring path{drive, L':', L'\\'};
         std::filesystem::path root = std::filesystem::path(path) / L"Warthog";
         std::error_code error;
@@ -435,26 +434,31 @@ extern "C" int SDL_main(int, char **) {
             data_roots.push_back(std::move(root));
     }
     std::filesystem::path selected_data;
-    xbox_restore_game_data(legacy_internal, selected_data);
-    if (xbox_device && !same_path(internal, development_root) && same_path(selected_data, development_root))
-        selected_data.clear();
+    xbox_restore_game_data(internal, selected_data);
     if (selected_data.empty()) {
         for (const auto &root : data_roots) {
             std::error_code migration_error;
             if (has_maps(root) && !std::filesystem::exists(root / L".localstate-migration.pending", migration_error)) {
                 selected_data = root;
-                xbox_remember_game_data(legacy_internal, selected_data);
+                if (!same_path(selected_data, legacy_internal) || !xbox_device)
+                    xbox_remember_game_data(internal, selected_data);
                 break;
             }
         }
     }
-    if (same_path(selected_data, legacy_internal) && !same_path(internal, legacy_internal) &&
-        has_maps(legacy_internal) && migrate_internal_storage(legacy_internal, internal)) {
+    if (xbox_device && same_path(selected_data, legacy_internal)) {
+        if (!has_maps(legacy_internal) || !migrate_internal_storage(legacy_internal, internal)) {
+            host_logf(HOST_LOG_ERROR, "existing internal game data could not be moved to D:\\DevelopmentFiles\\Warthog");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Warthog storage migration failed",
+                                     "Existing game data could not be copied to D:\\DevelopmentFiles\\Warthog. "
+                                     "Check available space and restart Warthog.", nullptr);
+            return 2;
+        }
         selected_data = internal;
-        xbox_remember_game_data(legacy_internal, selected_data);
+        xbox_remember_game_data(internal, selected_data);
     }
     if (selected_data.empty()) {
-        const bool installed = xbox_install_game_data(legacy_internal, internal, selected_data);
+        const bool installed = xbox_install_game_data(internal, internal, selected_data);
         uwp_SetScreenSize(physical_width, physical_height);
         host_sdl_set_backbuffer_size(physical_width, physical_height);
         if (!installed)
@@ -469,7 +473,7 @@ extern "C" int SDL_main(int, char **) {
             NULL);
         return 2;
     }
-    for (const wchar_t *folder : {L"custom_maps", L"maps_ce", L"maps_md", L"maps_pc"}) {
+    for (const wchar_t *folder : {L"maps_ce", L"maps_md", L"maps_pc"}) {
         std::error_code folder_error;
         std::filesystem::create_directories(selected_data / folder, folder_error);
         if (folder_error)

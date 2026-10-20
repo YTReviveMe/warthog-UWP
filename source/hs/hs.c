@@ -2831,6 +2831,7 @@ symbols in this file:
 #include "interface/hud_weapon.h"
 #include "interface/interface.h"
 #include "interface/player_ui.h"
+#include "saved games/player_profile.h"
 #include "rasterizer/rasterizer_cinematics.h"
 #include "shaders/shaders.h"
 #include "sound/game_sound.h"
@@ -11650,11 +11651,19 @@ static void hs_sv_say(
 {
 	wchar_t text[128];
 	short local_player_index;
+	long length = 0;
 	long index;
 
-	for (index = 0; message && message[index] && index < NUMBEROF(text) - 1; index++)
-		text[index] = (wchar_t)(unsigned char)message[index];
-	text[index] = 0;
+	/* (without '|', which the HUD's text takes with the character after it
+	as one: at the end, the string's terminator) */
+	for (index = 0; message && message[index] && length < NUMBEROF(text) - 1; index++)
+	{
+		if (message[index] != '|')
+		{
+			text[length++] = (wchar_t)(unsigned char)message[index];
+		}
+	}
+	text[length] = 0;
 	for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
 	{
 		if (local_player_get_player_index(local_player_index) != NONE)
@@ -14003,10 +14012,13 @@ static boolean hs_rebuild_source(
 	struct file_reference source_files[8];
 	short source_file_count;
 	short source_file_index;
+	char *scripts_name;
 
 	tag_block_resize(&global_scenario_get()->hs_source_files, 0);
-	sprintf(scenario_path, "data\\%s", tag_get_name(global_scenario_index));
-	sprintf(strrchr(scenario_path, '\\') + 1, "scripts");
+	/* port: snprintf (a map's tag's name may be any length) */
+	snprintf(scenario_path, sizeof(scenario_path), "data\\%s", tag_get_name(global_scenario_index));
+	scripts_name = strrchr(scenario_path, '\\') + 1;
+	snprintf(scripts_name, sizeof(scenario_path) - (scripts_name - scenario_path), "scripts");
 	file_reference_create_from_path(
 		&global_scripts,
 		"data\\global_scripts.hsc",
@@ -15954,6 +15966,40 @@ static boolean hs_compile_and_evaluate_command(
 	(players.c; a client is told it is the host's) */
 	if (hs_host_player_command(expression, "bringto"))
 		return players_coop_bring_to_host();
+	/* port: profile_reset_campaign, which clears the first player's
+	profile's campaign progress (player_ui_reset_campaign_progress) once
+	confirmed: "profile_reset_campaign yes" */
+	{
+		char const *text = hs_host_player_command(expression, "profile_reset_campaign");
+
+		if (text)
+		{
+			wchar_t wide_name[MAXIMUM_PLAYER_PROFILE_NAME_LENGTH];
+			char name[MAXIMUM_PLAYER_PROFILE_NAME_LENGTH];
+			boolean confirmed;
+			long length;
+
+			while (*text == ' ' || *text == '\t' || *text == '"')
+				text++;
+			confirmed = csstrncmp(text, "yes", 3) == 0 &&
+				(!text[3] || text[3] == ' ' || text[3] == '\t' || text[3] == '"' || text[3] == ')');
+			if (!player_ui_reset_campaign_progress(confirmed, wide_name, NUMBEROF(wide_name)))
+			{
+				console_warning("there is no profile to reset: make or choose one first");
+				return FALSE;
+			}
+			for (length = 0; wide_name[length]; length++)
+				name[length] = wide_name[length] < 0x80 ? (char)wide_name[length] : '?';
+			name[length] = 0;
+			if (!confirmed)
+				console_printf(FALSE,
+					"This clears every level %s finished and starts the campaign over at The Pillar of Autumn. "
+					"To do it, type: profile_reset_campaign yes", name);
+			else
+				console_printf(FALSE, "%s's campaign progress is reset: The Pillar of Autumn is the only level open", name);
+			return TRUE;
+		}
+	}
 	/* port: playing in another's game, the host decides the game: no
 	cheats, no game speed, nothing else a command changes of the game (the
 	game run each tick also puts back what was changed before joining,

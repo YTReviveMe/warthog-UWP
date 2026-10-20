@@ -4,9 +4,10 @@ DSOUND_SDL.C
 Xbox DirectSound for the Linux build: a software mixer on an SDL3 audio
 stream.
 
-The game plays everything through DirectSound streams: 16-bit stereo PCM
-(music and other uncompressed sounds) and Xbox ADPCM, mono or stereo, at 22
-or 44 kHz. A packet is decoded to 16-bit PCM when the game submits it, since
+The game plays nearly everything through DirectSound streams: 16-bit stereo
+PCM (music and other uncompressed sounds) and Xbox ADPCM, mono or stereo, at
+22 or 44 kHz; the loading screen's tones are buffers, played as streams of
+one looping packet (buffers). A packet is decoded to 16-bit PCM when the game submits it, since
 the sound cache may reuse its memory once the packet completes. The mixer
 runs on SDL's audio thread; for every voice it resamples to the output rate
 with a windowed sinc low pass (which is how SetFrequency changes pitch;
@@ -89,6 +90,9 @@ struct sdl_stream
 	DWORD frequency;
 
 	BOOL paused;
+	/* a buffer played with DSBPLAY_LOOPING (buffers): its one packet starts
+	over at its end, and never finishes */
+	BOOL looping;
 
 	/* 2D gains */
 	float volume;             /* SetVolume */
@@ -133,6 +137,8 @@ struct sdl_stream
 
 static pthread_mutex_t mixer_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct sdl_stream *streams;
+/* the DirectSound buffers' voices (buffers) */
+static struct sdl_stream *buffers;
 
 /* the listener, in DirectSound's left-handed +y up space */
 static struct
@@ -545,6 +551,8 @@ static BOOL take_frame(struct sdl_stream *stream, float *frame)
 			return TRUE;
 		}
 		stream->cursor = 0;
+		if (stream->looping && packet->frames)
+			continue;
 		packet->finished = TRUE;
 	}
 }
@@ -1120,6 +1128,8 @@ static void mix(float *output, unsigned long frames)
 	pthread_mutex_lock(&mixer_lock);
 	for (stream = streams; stream; stream = stream->next)
 		mix_voice(stream, output, reverb.send, frames);
+	for (stream = buffers; stream; stream = stream->next)
+		mix_voice(stream, output, reverb.send, frames);
 	/* a new environment, once the fade to the last is over */
 	if (reverb.serial != environment_serial && !reverb.fade)
 	{
@@ -1149,6 +1159,12 @@ static BOOL audio_started = FALSE;
 static pthread_mutex_t audio_output_lock = PTHREAD_MUTEX_INITIALIZER;
 static BOOL audio_device_ready = FALSE;
 #endif
+static BOOL audio_silent_clock = FALSE;
+static SDL_AudioSpec audio_spec;
+/* audio.device as the stream was opened for it ("" for the system's) */
+static char audio_device_name[256];
+/* the output it plays on (SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK for the system's) */
+static SDL_AudioDeviceID audio_device = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
 
 static void SDLCALL audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
@@ -1193,10 +1209,13 @@ static void *silent_clock_thread(void *parameter)
 			pthread_mutex_unlock(&audio_output_lock);
 			break;
 		}
-#endif
 		mix(buffer, 480);
-#ifdef HALO_XBOX_UWP
 		pthread_mutex_unlock(&audio_output_lock);
+#else
+		/* (stopped while a stream opened later, on another audio.device,
+		plays) */
+		if (!audio_stream)
+			mix(buffer, 480);
 #endif
 		next.tv_nsec += 10000000L;
 		if (next.tv_nsec >= 1000000000L)
@@ -1209,17 +1228,132 @@ static void *silent_clock_thread(void *parameter)
 	return NULL;
 }
 
+/* the playback device named so (SDL's name for it), else the system's
+default output, which SDL moves to wherever the system's default goes.
+audio.device chooses the game's; a voice output of its own, later, would
+open its stream on audio.voice_device's the same way. */
+static SDL_AudioDeviceID audio_device_named(char const *name)
+{
+	SDL_AudioDeviceID found = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+	SDL_AudioDeviceID *devices;
+	int count = 0, index;
+
+	if (!name || !name[0] || !strcmp(name, "default"))
+		return found;
+	devices = SDL_GetAudioPlaybackDevices(&count);
+	for (index = 0; devices && index < count; index++)
+	{
+		char const *device_name = SDL_GetAudioDeviceName(devices[index]);
+
+		if (device_name && !strcmp(device_name, name))
+		{
+			found = devices[index];
+			break;
+		}
+	}
+	SDL_free(devices);
+	if (found == SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK)
+		platform_log("audio: there is no output named \"%s\"; the system's default plays", name);
+	return found;
+}
+
+/* the playback devices' names (for Audio Setup's Output Device: the
+menus' copies of them), at most maximum; 0 without SDL's audio */
+int platform_audio_device_names(char const **names, int maximum)
+{
+#ifdef HALO_XBOX_UWP
+	(void)names;
+	(void)maximum;
+	return 0;
+#else
+	static char stored[32][256];
+	SDL_AudioDeviceID *devices;
+	int count = 0, index, written = 0;
+
+	if (!config_boolean("audio.enabled") || !platform_sdl_initialize())
+		return 0;
+	devices = SDL_GetAudioPlaybackDevices(&count);
+	for (index = 0; devices && index < count && written < maximum && written < 32; index++)
+	{
+		char const *name = SDL_GetAudioDeviceName(devices[index]);
+
+		if (!name || !name[0])
+			continue;
+		snprintf(stored[written], sizeof(stored[written]), "%s", name);
+		names[written] = stored[written];
+		written++;
+	}
+	SDL_free(devices);
+	return written;
+#endif
+}
+
+static void audio_silent_clock_start(void)
+{
+	pthread_t thread;
+
+	if (audio_silent_clock)
+		return;
+	audio_silent_clock = TRUE;
+	pthread_create(&thread, NULL, silent_clock_thread, NULL);
+	pthread_detach(thread);
+}
+
+/* the stream opened on audio.device's output (else the default's); FALSE
+when none opens */
+static BOOL audio_stream_open(void)
+{
+	char const *name = config_string("audio.device");
+
+	snprintf(audio_device_name, sizeof(audio_device_name), "%s", name);
+	audio_device = audio_device_named(name);
+	audio_stream = SDL_OpenAudioDeviceStream(audio_device, &audio_spec, audio_callback, NULL);
+	if (!audio_stream && audio_device != SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK)
+	{
+		platform_log("audio: cannot open \"%s\" (%s); the system's default plays", name, SDL_GetError());
+		audio_device = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+		audio_stream = SDL_OpenAudioDeviceStream(audio_device, &audio_spec, audio_callback, NULL);
+	}
+	if (!audio_stream)
+		return FALSE;
+	SDL_ResumeAudioStreamDevice(audio_stream);
+	return TRUE;
+}
+
+/* audio.device changed (Audio Setup's OK): the stream closed (which waits
+out the mixer's callback) and opened on the new one, on the game's thread */
+static void audio_device_update(void)
+{
+#ifdef HALO_XBOX_UWP
+	return;
+#else
+	char const *name = config_string("audio.device");
+
+	if (!audio_stream || !strcmp(name, audio_device_name))
+		return;
+	if (audio_device_named(name) == audio_device)
+	{
+		/* the same output (an unknown name plays on the default) */
+		snprintf(audio_device_name, sizeof(audio_device_name), "%s", name);
+		return;
+	}
+	SDL_DestroyAudioStream(audio_stream);
+	audio_stream = NULL;
+	if (!audio_stream_open())
+	{
+		platform_log("cannot open an audio device (%s); sound is silent", SDL_GetError());
+		audio_silent_clock_start();
+	}
+#endif
+}
+
 #ifdef HALO_XBOX_UWP
 static void *xbox_audio_open_thread(void *parameter)
 {
-	SDL_AudioSpec spec;
 	SDL_AudioStream *stream;
 
 	(void)parameter;
-	spec.format = SDL_AUDIO_F32;
-	spec.channels = OUTPUT_CHANNELS;
-	spec.freq = OUTPUT_RATE;
-	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_callback, NULL);
+	stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, audio_callback, NULL);
 	if (!stream)
 	{
 		platform_log("Xbox audio: device open failed (%s); silent clock remains", SDL_GetError());
@@ -1228,6 +1362,7 @@ static void *xbox_audio_open_thread(void *parameter)
 	if (!SDL_ResumeAudioStreamDevice(stream))
 	{
 		platform_log("Xbox audio: device resume failed (%s); silent clock remains", SDL_GetError());
+		SDL_DestroyAudioStream(stream);
 		return NULL;
 	}
 	pthread_mutex_lock(&audio_output_lock);
@@ -1240,7 +1375,6 @@ static void *xbox_audio_open_thread(void *parameter)
 
 static void audio_start(void)
 {
-	SDL_AudioSpec spec;
 	long buffer_frames;
 	char frames[16];
 
@@ -1256,9 +1390,9 @@ static void audio_start(void)
 
 	if (config_boolean("audio.enabled") && platform_sdl_initialize())
 	{
-		spec.format = SDL_AUDIO_F32;
-		spec.channels = OUTPUT_CHANNELS;
-		spec.freq = OUTPUT_RATE;
+		audio_spec.format = SDL_AUDIO_F32;
+		audio_spec.channels = OUTPUT_CHANNELS;
+		audio_spec.freq = OUTPUT_RATE;
 		/* audio.buffer_frames: the device's buffer (port_config.c) */
 		buffer_frames = config_integer("audio.buffer_frames");
 		if (buffer_frames < 64)
@@ -1276,21 +1410,12 @@ static void audio_start(void)
 				platform_log("Xbox audio: could not start device worker; silent clock remains");
 		}
 #else
-		audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, audio_callback, NULL);
-		if (audio_stream)
-		{
-			SDL_ResumeAudioStreamDevice(audio_stream);
+		if (audio_stream_open())
 			return;
-		}
 		platform_log("cannot open an audio device (%s); sound is silent", SDL_GetError());
 #endif
 	}
-	{
-		pthread_t thread;
-
-		pthread_create(&thread, NULL, silent_clock_thread, NULL);
-		pthread_detach(thread);
-	}
+	audio_silent_clock_start();
 }
 
 /* ---------- completion */
@@ -1518,15 +1643,16 @@ VOID WINAPI DirectSoundDoWork(void)
 {
 	static unsigned long volume_read_at = (unsigned long)-1;
 
-	/* (audio.volume, audio.reverb and audio.resampling read again when the
-	settings change: on the game's thread, not the mixer's, whose lock the
-	config's file I/O would hold) */
+	/* (audio.volume, audio.reverb, audio.resampling and audio.device read
+	again when the settings change: on the game's thread, not the mixer's,
+	whose lock the config's file I/O would hold) */
 	if (volume_read_at != config_changes())
 	{
 		volume_read_at = config_changes();
 		master_volume = (float)config_real("audio.volume");
 		reverb_enabled = config_boolean("audio.reverb");
 		resampling_linear = !strcmp(config_string("audio.resampling"), "linear");
+		audio_device_update();
 	}
 	streams_complete_finished();
 }
@@ -1806,25 +1932,43 @@ HRESULT WINAPI IDirectSoundStream_SetConeOutsideVolume(LPDIRECTSOUNDSTREAM strea
 
 /* ---------- buffers
 
-The game's only buffer is a silent looping one that keeps the voice
-processor busy; it needs no mixing. */
+The game has two buffers: the silent looping one that keeps the voice
+processor busy (on mix bins that are not the speakers), and the loading
+screen's four tones (progress_bar.c), Xbox ADPCM looping at a pitch of their
+own, their volumes following the progress. A buffer is a voice like a
+stream's, its data decoded once into one packet, which loops while it is
+played with DSBPLAY_LOOPING. Buffers are mixed from a list of their own, out
+of the streams' completion: the packet is the buffer's, never the game's to
+take back. Loop regions are not modelled: the game's are the whole buffer. */
 
-struct null_buffer
+static struct sdl_stream *buffer_from_interface(LPDIRECTSOUNDBUFFER buffer)
 {
-	ULONG reference_count;
-	LPVOID data;
-	DWORD size;
-	BOOL playing;
-};
+	return (struct sdl_stream *)buffer;
+}
 
 HRESULT WINAPI DirectSoundCreateBuffer(LPCDSBUFFERDESC description, LPDIRECTSOUNDBUFFER *result)
 {
-	struct null_buffer *buffer = calloc(1, sizeof(*buffer));
+	struct sdl_stream *buffer = calloc(1, sizeof(*buffer));
+	const WAVEFORMATEX *format = description->lpwfxFormat;
 
-	(void)description;
 	if (!buffer)
 		return E_OUTOFMEMORY;
 	buffer->reference_count = 1;
+	buffer->adpcm = format && format->wFormatTag == WAVE_FORMAT_XBOX_ADPCM;
+	buffer->channels = format && format->nChannels == 2 ? 2 : 1;
+	buffer->sample_rate = format ? format->nSamplesPerSec : 0;
+	buffer->frequency = buffer->sample_rate;
+	buffer->volume = 1.0f;
+	/* the mix bins asked for, else DirectSound's default, both fronts */
+	buffer->mix_left = !description->dwMixBinMask || (description->dwMixBinMask & DSMIXBIN_FRONT_LEFT) ? 1.0f : 0.0f;
+	buffer->mix_right = !description->dwMixBinMask || (description->dwMixBinMask & DSMIXBIN_FRONT_RIGHT) ? 1.0f : 0.0f;
+	/* stopped until Play */
+	buffer->paused = TRUE;
+	resampler_reset(buffer);
+	pthread_mutex_lock(&mixer_lock);
+	buffer->next = buffers;
+	buffers = buffer;
+	pthread_mutex_unlock(&mixer_lock);
 	*result = (LPDIRECTSOUNDBUFFER)buffer;
 	return DS_OK;
 }
@@ -1839,39 +1983,126 @@ HRESULT WINAPI IDirectSound_CreateSoundBuffer(LPDIRECTSOUND sound, LPCDSBUFFERDE
 
 ULONG WINAPI IDirectSoundBuffer_Release(LPDIRECTSOUNDBUFFER buffer)
 {
-	struct null_buffer *record = (struct null_buffer *)buffer;
-	ULONG count = --record->reference_count;
+	struct sdl_stream *record = buffer_from_interface(buffer);
+	struct sdl_stream **link;
+	ULONG count;
 
+	pthread_mutex_lock(&mixer_lock);
+	count = --record->reference_count;
 	if (!count)
-		free(record);
-	return count;
+	{
+		for (link = &buffers; *link; link = &(*link)->next)
+		{
+			if (*link == record)
+			{
+				*link = record->next;
+				break;
+			}
+		}
+	}
+	pthread_mutex_unlock(&mixer_lock);
+	if (count)
+		return count;
+	packet_release(&record->packets[0]);
+	free(record);
+	return 0;
 }
 
 HRESULT WINAPI IDirectSoundBuffer_SetBufferData(LPDIRECTSOUNDBUFFER buffer, LPVOID data, DWORD size)
 {
-	struct null_buffer *record = (struct null_buffer *)buffer;
+	struct sdl_stream *record = buffer_from_interface(buffer);
+	struct voice_packet *entry = &record->packets[0];
+	unsigned long frames = 0;
+	short *samples, *old_samples;
 
-	record->data = data;
-	record->size = size;
+	/* decode outside the lock */
+	samples = !data || !size ? NULL : record->adpcm ?
+		decode_adpcm(data, size, record->channels, &frames) :
+		decode_pcm(data, size, record->channels, &frames);
+	pthread_mutex_lock(&mixer_lock);
+	old_samples = entry->samples;
+	memset(entry, 0, sizeof(*entry));
+	entry->samples = samples;
+	entry->frames = samples ? frames : 0;
+	record->packet_head = 0;
+	record->packet_count = samples ? 1 : 0;
+	record->cursor = 0;
+	resampler_reset(record);
+	record->gains_valid = FALSE;
+	pthread_mutex_unlock(&mixer_lock);
+	free(old_samples);
 	return DS_OK;
 }
 
 HRESULT WINAPI IDirectSoundBuffer_Play(LPDIRECTSOUNDBUFFER buffer, DWORD reserved1, DWORD reserved2, DWORD flags)
 {
+	struct sdl_stream *record = buffer_from_interface(buffer);
+
 	(void)reserved1;
 	(void)reserved2;
-	(void)flags;
-	((struct null_buffer *)buffer)->playing = TRUE;
+	pthread_mutex_lock(&mixer_lock);
+	record->looping = (flags & DSBPLAY_LOOPING) != 0;
+	/* (one played to its end plays again from the start) */
+	if (record->packets[0].finished)
+	{
+		record->packets[0].finished = FALSE;
+		record->cursor = 0;
+		resampler_reset(record);
+		record->gains_valid = FALSE;
+	}
+	record->paused = FALSE;
+	pthread_mutex_unlock(&mixer_lock);
 	return DS_OK;
 }
 
 HRESULT WINAPI IDirectSoundBuffer_Stop(LPDIRECTSOUNDBUFFER buffer)
 {
-	((struct null_buffer *)buffer)->playing = FALSE;
+	struct sdl_stream *record = buffer_from_interface(buffer);
+
+	pthread_mutex_lock(&mixer_lock);
+	record->paused = TRUE;
+	pthread_mutex_unlock(&mixer_lock);
 	return DS_OK;
 }
 
-HRESULT WINAPI IDirectSoundBuffer_SetCurrentPosition(LPDIRECTSOUNDBUFFER buffer, DWORD play_cursor) { (void)buffer; (void)play_cursor; return DS_OK; }
+/* in bytes of the buffer's data; in ADPCM, to the start of its block */
+HRESULT WINAPI IDirectSoundBuffer_SetCurrentPosition(LPDIRECTSOUNDBUFFER buffer, DWORD play_cursor)
+{
+	struct sdl_stream *record = buffer_from_interface(buffer);
+	unsigned long frame = record->adpcm ?
+		play_cursor / (XBOX_ADPCM_BLOCK_BYTES * record->channels) * XBOX_ADPCM_BLOCK_SAMPLES :
+		play_cursor / (2 * record->channels);
+
+	pthread_mutex_lock(&mixer_lock);
+	record->packets[0].finished = FALSE;
+	record->cursor = frame < record->packets[0].frames ? frame : 0;
+	resampler_reset(record);
+	record->gains_valid = FALSE;
+	pthread_mutex_unlock(&mixer_lock);
+	return DS_OK;
+}
+
 HRESULT WINAPI IDirectSoundBuffer_SetLoopRegion(LPDIRECTSOUNDBUFFER buffer, DWORD loop_start, DWORD loop_length) { (void)buffer; (void)loop_start; (void)loop_length; return DS_OK; }
-HRESULT WINAPI IDirectSoundBuffer_SetPitch(LPDIRECTSOUNDBUFFER buffer, LONG pitch) { (void)buffer; (void)pitch; return DS_OK; }
-HRESULT WINAPI IDirectSoundBuffer_SetVolume(LPDIRECTSOUNDBUFFER buffer, LONG volume) { (void)buffer; (void)volume; return DS_OK; }
+
+/* the Xbox's pitch: 1/4096 octaves from 48 kHz (XAudioCalculatePitch), the
+rate the voice plays its frames at */
+HRESULT WINAPI IDirectSoundBuffer_SetPitch(LPDIRECTSOUNDBUFFER buffer, LONG pitch)
+{
+	struct sdl_stream *record = buffer_from_interface(buffer);
+	DWORD frequency = (DWORD)(48000.0 * pow(2.0, (double)pitch / 4096.0) + 0.5);
+
+	pthread_mutex_lock(&mixer_lock);
+	record->frequency = frequency ? frequency : 1;
+	pthread_mutex_unlock(&mixer_lock);
+	return DS_OK;
+}
+
+HRESULT WINAPI IDirectSoundBuffer_SetVolume(LPDIRECTSOUNDBUFFER buffer, LONG volume)
+{
+	struct sdl_stream *record = buffer_from_interface(buffer);
+
+	pthread_mutex_lock(&mixer_lock);
+	record->volume = gain_from_millibels(volume);
+	pthread_mutex_unlock(&mixer_lock);
+	return DS_OK;
+}

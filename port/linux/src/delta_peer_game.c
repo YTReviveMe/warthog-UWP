@@ -19,10 +19,12 @@ HALO_GAME_BROWSER; network.protocol = "opence" turns all of it off.
 #include "port_config.h"
 #include "halo_port_limits.h"
 #include "delta.h"
+#include "delta_compat.h"
 #include "delta_peer.h"
 #include "delta_maps.h"
 #include "halo_map_families.h"
 #include "delta_moderation.h"
+#include "delta_chat_game.h"
 #ifdef HALO_GAME_BROWSER
 #include "browser.h"
 #include "p2p.h"
@@ -331,6 +333,12 @@ int delta_peer_protocol(void)
 		memset(&local, 0, sizeof(local));
 		local.capabilities = (delta_u32)1 << _delta_capability_platform | (delta_u32)1 << _delta_capability_profile |
 			(delta_u32)1 << _delta_capability_ce_maps;
+		/* (text chat and the host's own lines: docs/delta.md, Chat) */
+		local.capabilities |= (delta_u32)1 << _delta_capability_chat |
+			(delta_u32)1 << _delta_capability_server_messages;
+		/* (changing teams during a game: a host offers it once its team
+		host is set, team_change.c) */
+		local.capabilities |= (delta_u32)1 << _delta_capability_team_change;
 		/* (moderation: a client signs with its player key's moderator key; a
 		host offers it only with the dedicated server's moderation) */
 #ifdef HALO_GAME_BROWSER
@@ -595,6 +603,46 @@ unsigned char delta_peer_advertised_flags(void)
 		DELTA_ADVERTISED_FLAG : 0;
 }
 
+/* (the wire's name fits its place, unended) */
+typedef char delta_advertised_wire_fits[sizeof(DELTA_WIRE) - 1 <= DELTA_ADVERTISED_WIRE_SIZE ? 1 : -1];
+
+void delta_peer_advertised_wire(unsigned char *reserved, int size)
+{
+	if (size < DELTA_ADVERTISED_RANGE_OFFSET + DELTA_ADVERTISED_RANGE_SIZE)
+		return;
+	memset(reserved + DELTA_ADVERTISED_WIRE_OFFSET, 0,
+		1 + DELTA_ADVERTISED_WIRE_SIZE + DELTA_ADVERTISED_RANGE_SIZE);
+	if (!delta_peer_advertised_flags())
+		return;
+	/* (the old slot: the oldest compatible wire; then the range bytes) */
+	delta_compat_advertise(reserved, size, DELTA_MAJOR, DELTA_WIRE);
+}
+
+int delta_peer_advertised_wire_matches(const unsigned char *reserved, int size, char *theirs, int theirs_size)
+{
+	if (theirs_size > 0)
+		theirs[0] = 0;
+	if (delta_peer_protocol() == _delta_peer_protocol_opence || size <= HALO_PORT_ADVERTISED_FLAGS_OFFSET ||
+		!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & DELTA_ADVERTISED_FLAG))
+	{
+		return -1;
+	}
+	return delta_compat_decide(reserved, size, DELTA_MAJOR, DELTA_WIRE, theirs, theirs_size);
+}
+
+int delta_peer_advertised_host_wire(const unsigned char *reserved, int size)
+{
+	struct delta_wire_id wire;
+
+	if (delta_peer_protocol() == _delta_peer_protocol_opence || size <= HALO_PORT_ADVERTISED_FLAGS_OFFSET ||
+		!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & DELTA_ADVERTISED_FLAG) ||
+		!delta_compat_host_wire(reserved, size, DELTA_MAJOR, &wire))
+	{
+		return 0;
+	}
+	return wire.number;
+}
+
 int delta_peer_host_player_limit(void)
 {
 	if (!delta_game.ready || delta_game.role != _role_host)
@@ -632,6 +680,15 @@ int delta_peer_player_platform(int player_index)
 		return _delta_platform_unknown;
 	}
 	return key.platform < NUMBER_OF_DELTA_PLATFORMS ? key.platform : _delta_platform_unknown;
+}
+
+int delta_peer_game_on_delta(void)
+{
+	if (!delta_game.ready)
+		return 0;
+	if (delta_game.role == _role_host)
+		return delta_peer_advertised_flags() != 0;
+	return delta_game.role == _role_client && delta_game.peer.client_state == _delta_peer_client_delta;
 }
 
 int delta_peer_machine_profile(int machine_index, unsigned char *player_id, delta_u32 *revision)
@@ -810,4 +867,144 @@ int delta_peer_game_moderation_bind_answer(int accepted)
 {
 	return delta_game.ready && delta_game.role == _role_client &&
 		delta_peer_client_moderation_bind_answer(&delta_game.peer, accepted);
+}
+
+/* ---------- chat (delta_chat_game.h) */
+
+int delta_peer_game_role(void)
+{
+	return delta_game.ready ? delta_game.role : _role_none;
+}
+
+void delta_peer_game_set_chat_host(const struct delta_peer_chat_host *host)
+{
+	delta_peer_protocol();
+	delta_peer_set_chat_host(&delta_game.peer, host);
+}
+
+void delta_peer_game_set_chat_mode(int mode, int flags)
+{
+	delta_peer_protocol();
+	delta_peer_set_chat_mode(&delta_game.peer, mode, flags);
+}
+
+void delta_peer_game_set_chat_cooldown(int seconds)
+{
+	delta_peer_protocol();
+	delta_peer_set_chat_cooldown(&delta_game.peer, seconds);
+}
+
+int delta_peer_game_chat_capable(int machine_index, int kind)
+{
+	return delta_game.ready && delta_game.role == _role_host &&
+		delta_peer_chat_capable(&delta_game.peer, machine_index, kind);
+}
+
+int delta_peer_game_chat_line(int machine_index, const struct delta_wire_chat_line *line)
+{
+	return delta_game.ready && delta_game.role == _role_host &&
+		delta_peer_chat_line(&delta_game.peer, machine_index, line);
+}
+
+void delta_peer_game_chat_mute(int machine_index, int mute, int minutes)
+{
+	if (delta_game.ready && delta_game.role == _role_host)
+		delta_peer_chat_mute(&delta_game.peer, GetTickCount(), machine_index, mute, minutes);
+}
+
+int delta_peer_game_chat_muted(int machine_index)
+{
+	return delta_game.ready && delta_game.role == _role_host &&
+		delta_peer_chat_muted(&delta_game.peer, GetTickCount(), machine_index);
+}
+
+int delta_peer_game_chat_ready(void)
+{
+	return delta_game.ready && delta_game.role == _role_client && delta_peer_client_chat_ready(&delta_game.peer);
+}
+
+int delta_peer_game_chat_server_messages(void)
+{
+	return delta_game.ready && delta_game.role == _role_client &&
+		delta_game.peer.client_state == _delta_peer_client_delta &&
+		(delta_game.peer.agreed & ((delta_u32)1 << _delta_capability_server_messages));
+}
+
+unsigned int delta_peer_game_chat_say(int scope, const char *text, int length)
+{
+	if (!delta_game.ready || delta_game.role != _role_client)
+		return 0;
+	return delta_peer_client_chat_say(&delta_game.peer, scope, text, length);
+}
+
+unsigned int delta_peer_game_chat_received(void)
+{
+	return delta_game.ready ? delta_peer_client_chat_received(&delta_game.peer) : 0;
+}
+
+int delta_peer_game_chat_get(unsigned int index, struct delta_wire_chat_line *line)
+{
+	return delta_game.ready && delta_peer_client_chat_get(&delta_game.peer, index, line);
+}
+
+int delta_peer_game_chat_config(struct delta_wire_chat_config *config)
+{
+	if (!delta_game.ready || delta_game.role != _role_client || !delta_game.peer.client_chat.has_config)
+		return 0;
+	*config = delta_game.peer.client_chat.config;
+	return 1;
+}
+
+unsigned int delta_peer_game_chat_refused(struct delta_wire_chat_refused *refused)
+{
+	if (!delta_game.ready)
+		return 0;
+	if (refused)
+		*refused = delta_game.peer.client_chat.refused;
+	return delta_game.peer.client_chat.refused_count;
+}
+
+int delta_peer_game_read_save_file(const char *name, char *text, int size)
+{
+	char path[1024];
+	FILE *stream;
+	size_t length;
+
+	if (!name || !name[0] || strstr(name, "..") || strchr(name, '/') || strchr(name, '\\') || size <= 0)
+		return -1;
+	snprintf(path, sizeof(path), "%s/%s", platform_save_root(), name);
+	stream = fopen(path, "rb");
+	if (!stream)
+		return -1;
+	length = fread(text, 1, (size_t)size - 1, stream);
+	fclose(stream);
+	text[length] = 0;
+	return (int)length;
+}
+
+/* ---------- team changes (team_change.c) */
+
+void delta_peer_game_set_team_host(const struct delta_peer_team_host *host)
+{
+	delta_peer_protocol();
+	delta_peer_set_team_host(&delta_game.peer, host);
+}
+
+int delta_peer_game_team_ready(void)
+{
+	return delta_game.ready && delta_game.role == _role_client && delta_peer_client_team_ready(&delta_game.peer);
+}
+
+unsigned int delta_peer_game_team_request(int player, int team)
+{
+	if (!delta_game.ready || delta_game.role != _role_client)
+		return 0;
+	return delta_peer_client_team_request(&delta_game.peer, player, team);
+}
+
+unsigned int delta_peer_game_team_result(struct delta_wire_team_result *result)
+{
+	if (!delta_game.ready)
+		return 0;
+	return delta_peer_client_team_result(&delta_game.peer, result);
 }

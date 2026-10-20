@@ -11,7 +11,7 @@ build.
 
 #ifdef HALO_64BIT
 At start-up the layer reserves 4 GB at XBOX_ADDRESS_SPACE_BASE
-(halo_xbox_address.h), so Xbox address X is host address base + X. On the
+(xbox_address.h; on Android, wherever the system has room), so Xbox address X is host address base + X. On the
 Xbox, physical memory at address P is visible at virtual address
 0x80000000 + P; the game asks for its game state and tag cache at fixed
 #else
@@ -40,6 +40,9 @@ Xbox kernel does.
 #include "platform.h"
 
 #include <errno.h>
+#ifdef HALO_ANDROID
+#include <stdio.h>
+#endif
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -59,10 +62,19 @@ static BOOL arena_reserved = FALSE;
 static pthread_mutex_t arena_lock = PTHREAD_MUTEX_INITIALIZER;
 #ifdef HALO_CUSTOM_EDITION
 int platform_ce_tag_cache_ready = FALSE;
+unsigned int platform_ce_conversion_room = 0;
 #endif
 #ifdef HALO_64BIT
 
 unsigned int platform_host_page_size = PAGE_SIZE_BYTES;
+#endif
+#if defined(HALO_64BIT) && defined(HALO_ANDROID)
+/* where the Xbox address space is (xbox_address.h) */
+unsigned long long xbox_address_space_base;
+/* why the Xbox address space could not be reserved, or empty: an Android
+app's library is loaded into a process the system has laid out already,
+and the app tells the player (port/android/native64/android64_main.c) */
+char platform_xbox_address_space_error[160];
 #endif
 
 static int protection_to_host(DWORD protect)
@@ -103,8 +115,30 @@ static void contiguous_arena_reserve(void)
 #ifdef HALO_64BIT
 	if (host_page_size > 0)
 		platform_host_page_size = (unsigned int)host_page_size;
+#ifdef HALO_ANDROID
+	/* anywhere the system has room (xbox_address.h): twice the size,
+	of which the 4 GB-aligned part is kept, so that Xbox address X is host
+	address base + X with X in the low 32 bits, as at the desktop's fixed
+	addresses */
+	result = mmap(NULL, 2 * XBOX_ADDRESS_SPACE_SIZE, PROT_NONE,
+		MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	if (result != MAP_FAILED)
+	{
+		uintptr_t start = (uintptr_t)result;
+		uintptr_t end = start + 2 * XBOX_ADDRESS_SPACE_SIZE;
+		uintptr_t base = (start + XBOX_ADDRESS_SPACE_SIZE - 1) & ~(uintptr_t)(XBOX_ADDRESS_SPACE_SIZE - 1);
+
+		if (base > start)
+			munmap(result, base - start);
+		if (base + XBOX_ADDRESS_SPACE_SIZE < end)
+			munmap((void *)(base + XBOX_ADDRESS_SPACE_SIZE), end - (base + XBOX_ADDRESS_SPACE_SIZE));
+		xbox_address_space_base = base;
+		wanted = result = (void *)base;
+	}
+#else
 	result = mmap(wanted, XBOX_ADDRESS_SPACE_SIZE, PROT_NONE,
 		MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+#endif
 	if (result != wanted)
 #else
 	if (result == wanted)
@@ -121,7 +155,12 @@ static void contiguous_arena_reserve(void)
 		if (result != MAP_FAILED)
 			munmap(result, XBOX_ADDRESS_SPACE_SIZE);
 		platform_log("cannot reserve the Xbox address space at %p (%s)", wanted, reason);
+#ifdef HALO_ANDROID
+		snprintf(platform_xbox_address_space_error, sizeof(platform_xbox_address_space_error), "%s", reason);
+		return;
+#else
 		abort();
+#endif
 #else
 		if (result != MAP_FAILED)
 			munmap(result, PLATFORM_CONTIGUOUS_SIZE);
@@ -136,9 +175,21 @@ static void contiguous_arena_reserve(void)
 	break heap grows up from just past it, and the libraries, mmap'd blocks
 	and the stack are at the top below 0xc0000000 or 0xffffffff, growing
 	down. Taken here, before anything else is mapped, never in place of a
-	mapping (MAP_FIXED_NOREPLACE); backed on first touch */
-	result = mmap((void *)PLATFORM_CE_TAG_CACHE_BASE, PLATFORM_CE_TAG_CACHE_SIZE, PROT_READ | PROT_WRITE,
-		MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	mapping (MAP_FIXED_NOREPLACE); backed on first touch. With the room
+	above it if that is free too, else without */
+	result = mmap((void *)PLATFORM_CE_TAG_CACHE_BASE, PLATFORM_CE_TAG_CACHE_SIZE + PLATFORM_CE_CONVERSION_ROOM_SIZE,
+		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	if (result == (void *)PLATFORM_CE_TAG_CACHE_BASE)
+	{
+		platform_ce_conversion_room = PLATFORM_CE_CONVERSION_ROOM_SIZE;
+	}
+	else
+	{
+		if (result != MAP_FAILED)
+			munmap(result, PLATFORM_CE_TAG_CACHE_SIZE + PLATFORM_CE_CONVERSION_ROOM_SIZE);
+		result = mmap((void *)PLATFORM_CE_TAG_CACHE_BASE, PLATFORM_CE_TAG_CACHE_SIZE, PROT_READ | PROT_WRITE,
+			MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED_NOREPLACE, -1, 0);
+	}
 	if (result != (void *)PLATFORM_CE_TAG_CACHE_BASE)
 	{
 		if (result != MAP_FAILED)
@@ -161,15 +212,17 @@ static void contiguous_arena_reserve(void)
 		platform_log("cannot commit the Xbox contiguous memory window (%s)", strerror(errno));
 		abort();
 	}
-	/* Custom Edition maps' tag cache (platform.h) */
-	if (mmap(xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE), PLATFORM_CE_TAG_CACHE_SIZE, PROT_READ | PROT_WRITE,
-		MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) != xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE))
+	/* Custom Edition maps' tag cache, and the room above it (platform.h) */
+	if (mmap(xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE), PLATFORM_CE_TAG_CACHE_SIZE + PLATFORM_CE_CONVERSION_ROOM_SIZE,
+		PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0) !=
+		xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE))
 	{
 		platform_log("cannot commit Custom Edition maps' tag cache (%s)", strerror(errno));
 	}
 	else
 	{
 		platform_ce_tag_cache_ready = TRUE;
+		platform_ce_conversion_room = PLATFORM_CE_CONVERSION_ROOM_SIZE;
 	}
 	arena_reserved = TRUE;
 }

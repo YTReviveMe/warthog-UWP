@@ -60,6 +60,10 @@ long get_return_eip(
 	void);
 real hud_globals_get_scale(
 	boolean in_multiplayer);
+#ifdef HALO_CUSTOM_EDITION
+real hud_bitmap_group_scale(
+	long bitmap_group_index);
+#endif
 void hud_retrieve_bitmap_and_bounding_rect(
 	long bitmap_group_index,
 	short sequence_index,

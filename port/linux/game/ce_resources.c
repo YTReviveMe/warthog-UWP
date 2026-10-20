@@ -151,6 +151,11 @@ static HANDLE ce_decoded_sounds_file;
 static char ce_decoded_sounds_path[256];
 /* the space left in the map's tag cache (ce_resources_allocate) */
 static unsigned long ce_free_next, ce_free_end;
+/* and in the room above it (platform.h), once that runs out: the next free
+address there, 0 while the tag cache's room is used. Allocations only ever
+move up, so a mark (ce_resources_free_mark) is the lowest address of all
+that is allocated after it */
+static unsigned long ce_room_next;
 
 /* ---------- private code */
 
@@ -182,7 +187,10 @@ static boolean ce_resource_map_open(
 	map_family_resource(ce_resource_map_names[type], path, sizeof(path));
 	file = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	if (file == INVALID_HANDLE_VALUE)
+	{
+		ce_refusal_explain("It needs Custom Edition's %s.map: copy it into maps_ce.", ce_resource_map_names[type]);
 		return ce_refuse("there is no %s", path);
+	}
 	file_size = GetFileSize(file, &file_size_high);
 	/* (its type, its paths before its resources' table, the table in the
 	file) */
@@ -932,7 +940,10 @@ static boolean ce_resources_place(
 				resource->offset, ce_resource_map_names[type]);
 		}
 		if (next > end_free || resource->size > end_free - next)
+		{
+			ce_refusal_explain("It is too big for the game's tag cache.");
 			return ce_refuse("there is no room in the tag cache for %s's resource", name);
+		}
 		copy = image->data + (next - image->base);
 		if (!ce_read(map->file, resource->offset, copy, resource->size))
 			return ce_refuse("%s's resource could not be read", name);
@@ -1145,6 +1156,7 @@ boolean ce_resources_tags_loaded(
 	ce_indexed_tags = system_malloc(tag_count);
 	ce_indexed_tag_count = ce_indexed_tags ? tag_count : 0;
 	ce_free_next = ce_free_end = 0;
+	ce_room_next = 0;
 	if (!ce_indexed_tags)
 		return FALSE;
 	image.data = xbox_pointer(CE_IMAGE_TAG_CACHE_BASE);
@@ -1465,15 +1477,28 @@ HANDLE ce_resources_file_for_tag(
 }
 
 /* size bytes (16-byte aligned) of the map's tag cache, after its tags and
-resources (ce_models.c): their Xbox address, or 0 if there is no room */
+resources (ce_models.c), or once that room is used, of the room above the
+tag cache (platform.h; Halo PC kept what the port puts here, its models'
+and level's buffers, outside its tag cache): their Xbox address, or 0 if
+there is no room */
 unsigned long ce_resources_allocate(
 	unsigned long size)
 {
+	unsigned long room_base = CE_IMAGE_TAG_CACHE_BASE + CE_IMAGE_TAG_CACHE_SIZE;
+	unsigned long room_end = room_base + CE_CONVERSION_ROOM;
 	unsigned long address = ce_free_next;
 
-	if (!address || address > ce_free_end || size > ce_free_end - address)
+	if (!address)
 		return 0;
-	ce_free_next = (address + size + 15) & ~15UL;
+	if (!ce_room_next && address <= ce_free_end && size <= ce_free_end - address)
+	{
+		ce_free_next = (address + size + 15) & ~15UL;
+		return address;
+	}
+	address = ce_room_next ? ce_room_next : room_base;
+	if (address > room_end || size > room_end - address)
+		return 0;
+	ce_room_next = (address + size + 15) & ~15UL;
 	return address;
 }
 
@@ -1482,14 +1507,24 @@ when it unloads, ce_resources_free_to) */
 unsigned long ce_resources_free_mark(
 	void)
 {
-	return ce_free_next;
+	return ce_room_next ? ce_room_next : ce_free_next;
 }
 
 void ce_resources_free_to(
 	unsigned long mark)
 {
-	if (mark && mark <= ce_free_next)
+	if (!mark)
+		return;
+	if (ce_room_next && mark >= CE_IMAGE_TAG_CACHE_BASE + CE_IMAGE_TAG_CACHE_SIZE)
+	{
+		if (mark <= ce_room_next)
+			ce_room_next = mark;
+	}
+	else if (mark <= ce_free_next)
+	{
 		ce_free_next = mark;
+		ce_room_next = 0;
+	}
 }
 
 /* the map unloaded (cache_files.c) */
@@ -1498,6 +1533,7 @@ void ce_resources_tags_unloaded(
 {
 	ce_indexed_tag_count = 0;
 	ce_free_next = ce_free_end = 0;
+	ce_room_next = 0;
 }
 
 #endif

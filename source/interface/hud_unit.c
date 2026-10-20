@@ -396,6 +396,24 @@ void hud_unit_port_set_script_flags(
 	unit_hud_globals->script_flags = flags;
 }
 
+/* port: whether the shield's fall from the last value the HUD saw is a hit.
+The host drains an overshield by about 0.00074 a tick and moves the HUD's
+last value with it (hud_tick_shield), so on the host the two stay equal. A
+network client's shield falls with the host's updates instead, after the
+HUD has taken its last value for the tick, so each frame it was a tick
+behind: the meter flashed and the shield damage sound played for the whole
+overshield, where the Xbox plays nothing. A small step from past full (0.05
+or less, about 70 ticks of drain) is that drain; a larger one is a hit,
+which still flashes the meter and plays the sound. */
+static boolean hud_shield_drop_is_hit(
+	real last_shield_vitality,
+	real shield_vitality)
+{
+	if (!(last_shield_vitality > shield_vitality))
+		return FALSE;
+	return !(last_shield_vitality > 1.0f && last_shield_vitality - shield_vitality <= 0.05f);
+}
+
 void hud_play_unit_sounds(
 	struct player_datum const *player,
 	boolean show_hud)
@@ -445,11 +463,13 @@ void hud_play_unit_sounds(
 							sound_flags = TEST_FLAG(
 								unit->object.damage_flags,
 								_object_shield_charging_bit);
+							/* port: not an overshield's drain (hud_shield_drop_is_hit) */
 							SET_FLAG(
 								sound_flags,
 								_unit_hud_shield_damage,
-								hud_state->last_shield_vitality >
-									unit->object.shield_vitality);
+								hud_shield_drop_is_hit(
+									hud_state->last_shield_vitality,
+									unit->object.shield_vitality));
 							SET_FLAG(
 								sound_flags,
 								_unit_hud_shield_low,
@@ -530,17 +550,11 @@ static void hud_update_unit_local_player(
 
 			if (hud_state->last_shield_vitality > unit->object.shield_vitality)
 			{
-				real shield_drop = hud_state->last_shield_vitality - unit->object.shield_vitality;
-
-				/* port: the host drains an overshield by about 0.00074 a tick
-				and moves this meter's memory with it (hud_tick_shield). A
-				client does not drain shields. The lower value arrived as a
-				hit, so the meter flashed and the shield damage sound played
-				for the whole overshield. A small step from past full is that
-				drain. A larger step is a hit, and the meter still flashes.
-				The step is closed here, so one late packet cannot leave the
-				meter a little behind and keep the flash going. */
-				if (hud_state->last_shield_vitality > 1.0f && shield_drop <= 0.05f)
+				/* port: an overshield's drain is not a hit
+				(hud_shield_drop_is_hit). The step is closed here, so one late
+				packet cannot leave the meter a little behind and keep the
+				flash going. */
+				if (!hud_shield_drop_is_hit(hud_state->last_shield_vitality, unit->object.shield_vitality))
 				{
 					hud_state->last_shield_vitality = unit->object.shield_vitality;
 					hud_state->fade_time = -1.0f;

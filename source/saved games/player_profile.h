@@ -37,6 +37,7 @@ enum
 	_button_preset_swap_a_and_left_trigger,
 	_button_preset_swap_b_and_left_trigger,
 	_button_preset_swap_b_and_right_thumb,
+	_button_preset_bumper_jumper, /* port: jump on the left bumper (the white button) */
 	NUMBER_OF_BUTTON_PRESETS
 };
 

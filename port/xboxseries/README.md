@@ -21,11 +21,9 @@ Select internal or external storage on first launch and browse to a legally owne
 
 On Xbox, internal installations use `D:\DevelopmentFiles\Warthog`. Put the ISO or XISO there for first-boot setup. External installations use the drive's `Warthog` folder. Saves, settings, map caches and logs stay with the selected installation. Internal installations also keep the shader cache there.
 
-The app retains its installation-selection record in LocalState. If the development folder is not writable, the app falls back to `LocalState/Warthog`.
+Existing internal installations are copied to `D:\DevelopmentFiles\Warthog` on startup. The original files are left in place. External installations are unchanged.
 
-Existing internal installations are copied from LocalState to the development folder on startup. The original files are left in place. External installations are unchanged.
-
-Xbox maps belong in `Warthog\maps`. Put Custom Edition `.map` files and their `bitmaps.map`, `sounds.map` and `loc.map` resource files in `Warthog\custom_maps`.
+Xbox maps belong in `Warthog\maps`. Put Custom Edition `.map` files and their `bitmaps.map`, `sounds.map` and `loc.map` resource files in `Warthog\maps_ce`. Multiplayer map downloads also go into `maps_ce`. Existing maps in `custom_maps` remain readable.
 
 No retail game data is included. Upstream licensing and third-party notices remain applicable.
 The APPX includes Warthog's GPL license, console SDK permission in the Warthog README, and the bundled dependencies' notices.

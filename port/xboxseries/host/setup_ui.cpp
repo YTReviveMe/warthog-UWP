@@ -124,7 +124,7 @@ Windows::Foundation::IAsyncAction select_file(const std::shared_ptr<launcher_sta
                       ? parent
                       : co_await parent.CreateFolderAsync(L"Warthog", CreationCollisionOption::OpenIfExists);
     StorageApplicationPermissions::FutureAccessList().AddOrReplace(data_access_token, destination);
-    co_await destination.CreateFolderAsync(L"custom_maps", CreationCollisionOption::OpenIfExists);
+    co_await destination.CreateFolderAsync(L"maps_ce", CreationCollisionOption::OpenIfExists);
     state->selected_image_path = to_string(file.Path());
     state->destination_path = to_string(destination.Path());
     state->focus_install = true;

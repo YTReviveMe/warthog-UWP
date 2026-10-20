@@ -690,6 +690,7 @@ console's, port/xbox/game/xbox_browser_screen.c): a screen of code over the
 widgets, as the virtual keyboard is */
 boolean browser_screen_active(void);
 void browser_screen_open(void);
+boolean browser_screen_open_map_offer(void);
 void browser_screen_process(void);
 void browser_screen_render(void);
 /* port: moderation on a dedicated server (port/linux/game/moderation_screen.c) */
@@ -699,6 +700,13 @@ void moderation_screen_process(void);
 void moderation_screen_render(void);
 /* the menus' pointer, while it is up (its own taps and clicks) */
 void browser_screen_pointer(struct halo_ui_pointer const *pointer);
+/* port: the question before joining a clipboard's invite
+(port/linux/game/invite_prompt.c) */
+boolean invite_prompt_active(void);
+void invite_prompt_update(boolean menu_open);
+void invite_prompt_process(void);
+void invite_prompt_pointer(struct halo_ui_pointer const *pointer);
+void invite_prompt_render(void);
 /* (ONLINE GAMES, below: its list moves focus item by item) */
 boolean ui_widget_online_games_list(struct widget_instance *widget);
 #endif
@@ -1401,7 +1409,21 @@ boolean pc_menu_frame_placement(
 	short *x,
 	short *y,
 	short *width,
-	short *height);
+	short *height,
+	short *texel_y);
+/* port: a picture of a controller's button in the menus' prompts drawn
+as the keyboard's key cap instead, while the keyboard or mouse was used
+last (port/linux/game/menu_tags.c): TRUE when it was */
+boolean pc_menu_button_key_cap(
+	long bitmap_tag_index,
+	short x0,
+	short y0,
+	short x1,
+	short y1,
+	float alpha);
+/* port: the row of the bitmap draw_bitmap_in_rect starts from (a frame the
+menus place, pc_menu_frame_placement): 0 but while one is drawn */
+static short draw_bitmap_texel_y = 0;
 static void widget_instance_initialize(
 	struct widget_instance *widget,
 	struct widget_instance *parent,
@@ -1470,8 +1492,9 @@ static wchar_t *spinner_string_list_get_string(
 /* ---------- globals */
 
 /* port: text boxes' string list indices from here are the descriptions of
-spinners' extra items (kills_to_win_extra_descriptions) */
-#define SPINNER_EXTRA_DESCRIPTION_BASE 0x5000
+spinners' extra items (kills_to_win_extra_descriptions), above the Custom
+Edition maps' display indices (custom_edition_maps.c keeps them below 0x7000) */
+#define SPINNER_EXTRA_DESCRIPTION_BASE 0x7000
 /* ... and the pixels a spinner with extra items is wider (for three digits) */
 #define SPINNER_EXTRA_WIDTH 12
 
@@ -1509,6 +1532,10 @@ static struct ui_widget_bss_prefix ui_widget_globals_storage;
 #define dpad_event_times ui_widget_globals_storage.dpad_event_times
 real_argb_color ui_plasma_effect_color;
 short local_player_index_for_draw_string_and_hack_in_icons;
+/* port: draw_string_and_hack_in_icons draws a widget's text (the menus'
+keys for the buttons, not the game's: input_abstraction_port_icon_key) */
+static boolean draw_string_icons_for_menus = FALSE;
+short draw_string_and_hack_in_icons_end_x = 0;
 
 /* January defines this and never references it, as we do not */
 real const _one_over_255 = 1.0f / 255.0f;
@@ -1785,8 +1812,9 @@ void draw_bitmap_in_rect(
 			vertices[vertex_index].color = argb;
 			vertices[vertex_index].texture_coordinates.x =
 				(vertex_index % 3) ? texture_width : 0.0f;
-			vertices[vertex_index].texture_coordinates.y =
-				(vertex_index > 1) ? texture_height : 0.0f;
+			/* port: from the row the menus place it from (draw_bitmap_texel_y) */
+			vertices[vertex_index].texture_coordinates.y = draw_bitmap_texel_y / bitmap_height +
+				((vertex_index > 1) ? texture_height : 0.0f);
 			vertices[vertex_index].position = points[vertex_index];
 		}
 
@@ -2647,6 +2675,11 @@ static void widget_instance_give_focus_by_tag(
 	return;
 }
 
+/* a list watched for the player stepping it with left/right (the Xbox-style
+controls screen watches its layout spinner) */
+struct widget_instance *g_list_widget_watched = NULL;
+boolean g_list_widget_watched_stepped = FALSE;
+
 boolean widget_event_function_list_widget_goto_next_item(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -2661,6 +2694,8 @@ boolean widget_event_function_list_widget_goto_next_item(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		1230,
 		widget);
+	if (widget == g_list_widget_watched)
+		g_list_widget_watched_stepped = TRUE;
 	definition = ui_widget_definition_get(widget->definition_tag_index);
 	match_vassert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
@@ -2813,6 +2848,8 @@ boolean widget_event_function_list_widget_goto_previous_item(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
 		1359,
 		widget);
+	if (widget == g_list_widget_watched)
+		g_list_widget_watched_stepped = TRUE;
 	definition = ui_widget_definition_get(widget->definition_tag_index);
 	match_vassert(
 		"c:\\halo\\SOURCE\\interface\\ui_widget.c",
@@ -4376,6 +4413,24 @@ void draw_string_and_hack_in_icons(
 			short icon_index;
 
 			current = icon_spec + wcslen(icon_names[icon_type]);
+			/* port: the keyboard's key, "[E]", in place of the controller's
+			button while the keyboard or mouse was used last (the menus'
+			own keys in the menus: input_abstraction_port_icon_key) */
+			{
+				wchar_t key_text[48];
+
+				if (icon_type <= _icon_look &&
+					input_abstraction_port_icon_key(
+						local_player_index_for_draw_string_and_hack_in_icons,
+						icon_type,
+						draw_string_icons_for_menus,
+						key_text,
+						NUMBEROF(key_text)))
+				{
+					render_state_text(bounds, &cursor_bounds, key_text);
+					continue;
+				}
+			}
 			remapped_icon_type = remap_sticks_for_local_player(
 				icon_type,
 				local_player_index_for_draw_string_and_hack_in_icons);
@@ -4469,6 +4524,7 @@ void draw_string_and_hack_in_icons(
 	}
 	if (current)
 		render_state_text(bounds, &cursor_bounds, current);
+	draw_string_and_hack_in_icons_end_x = cursor_bounds.x0;
 	draw_string_set_indents(0, 0);
 
 	return;
@@ -4893,6 +4949,42 @@ void display_error_damaged_media(
 	return;
 }
 
+/* port: the damaged disc error's screen with the port's own text in place
+of the error's (a Custom Edition map refused: cache_files_windows.c), as the
+game has no error that names a map's problem */
+void display_error_damaged_media_text(
+	wchar_t const *text)
+{
+	static wchar_t error_text[512];
+	struct widget_instance *widget;
+
+	ui_widgets_close_all();
+	widget = ui_widget_load_by_name_or_tag("ui\\shell\\error\\error_abort_to_dashboard_you_have_no_choice", NONE, NULL,
+		NONE, NONE, NONE, NONE);
+	if (widget && widget->type == _ui_widget_type_text_box)
+	{
+		widget->parameters.text_box.string_list_index = _error_media_damaged;
+		widget->widget_is_error_dialog = TRUE;
+		dashboard_abort_error = _error_media_damaged;
+		if (text && text[0])
+		{
+			ustrncpy(error_text, text, NUMBEROF(error_text) - 1);
+			error_text[NUMBEROF(error_text) - 1] = 0;
+			ui_widget_port_error_text_box = widget;
+			ui_widget_port_error_text = error_text;
+		}
+	}
+	else
+	{
+		/* (the game's own, which says why it failed) */
+		display_error_abort_to_dashboard(_error_media_damaged, FALSE);
+	}
+	input_frame_end();
+	main_loop_of_death();
+
+	return;
+}
+
 /* port: menu_tags.c's */
 char const *pc_menus_screen(char const *name);
 
@@ -5204,6 +5296,16 @@ void main_screen_shell_load(
 			if (!ui_widget_load_by_name_or_tag(pc_menus_root_name(), NONE, NULL, NONE, NONE, NONE, NONE))
 				error(_error_silent, "failed to load main screen shell window");
 		}
+#ifdef HALO_GAME_BROWSER
+		/* port: a join left for a Custom Edition map the player may
+		download: Online Games offers it, and joins the game again
+		(port/linux/game/browser_screen.c), in place of the map's error */
+		if (browser_screen_open_map_offer())
+		{
+			widget_globals.main_menu_deferred_error_code = NONE;
+			ui_widget_port_error_pending_text = NULL;
+		}
+#endif
 		if (widget_globals.main_menu_deferred_error_code != NONE)
 		{
 			display_error(widget_globals.main_menu_deferred_error_code, NONE, TRUE, FALSE);
@@ -5659,7 +5761,11 @@ static void widget_instance_render_text_box(
 		ui_widget_port_text_wrap(*text, &bounds, width);
 	}
 	if (string_has_icons_to_draw(*text))
+	{
+		draw_string_icons_for_menus = TRUE;
 		draw_string_and_hack_in_icons(&bounds, &clip, NULL, 0, *text, FALSE);
+		draw_string_icons_for_menus = FALSE;
+	}
 	else
 		rasterizer_draw_unicode_string(&bounds, &clip, NULL, 0, *text);
 
@@ -6167,20 +6273,31 @@ static short ui_mouse_key_button(
 		{ "start_butn", _gamepad_binary_button_start },
 		{ "back_butn", _gamepad_binary_button_back },
 	};
-	char const *name = tag_get_name(widget->definition_tag_index);
-	char const *leaf = name ? strrchr(name, '\\') : NULL;
-	long key_index;
+	long tag_indices[2];
+	long tag;
 
-	leaf = leaf ? leaf + 1 : name;
-	for (key_index = 0; leaf && key_index < NUMBEROF(keys); key_index++)
+	/* the widget's name (ui.map's prompts, "a_butn"), or its picture's (the
+	Chupathingy menus' prompts are "chupathingy\\prompts\\a", drawn from
+	"chupathingy\\prompts\\a_butn": chupathingy/prompts.xml) */
+	tag_indices[0] = widget->definition_tag_index;
+	tag_indices[1] = ui_widget_definition_get(widget->definition_tag_index)->background_bitmap.index;
+	for (tag = 0; tag < NUMBEROF(tag_indices); tag++)
 	{
-		long length = (long)strlen(keys[key_index].name);
+		char const *name = tag_indices[tag] != NONE ? tag_get_name(tag_indices[tag]) : NULL;
+		char const *leaf = name ? strrchr(name, '\\') : NULL;
+		long key_index;
 
-		/* and the smaller icons of the dialogs, "a_butn_sm" */
-		if (!strncmp(leaf, keys[key_index].name, length) &&
-			(leaf[length] == '\0' || leaf[length] == '_'))
+		leaf = leaf ? leaf + 1 : name;
+		for (key_index = 0; leaf && key_index < NUMBEROF(keys); key_index++)
 		{
-			return keys[key_index].button_index;
+			long length = (long)strlen(keys[key_index].name);
+
+			/* and the smaller icons of the dialogs, "a_butn_sm" */
+			if (!strncmp(leaf, keys[key_index].name, length) &&
+				(leaf[length] == '\0' || leaf[length] == '_'))
+			{
+				return keys[key_index].button_index;
+			}
 		}
 	}
 
@@ -7065,14 +7182,17 @@ static void ui_widgets_process_mouse(
 			ui_debug_log_keyboard_tap(pointer.click_x, pointer.click_y, hit);
 	}
 #ifdef HALO_GAME_BROWSER
-	/* Online Games takes the pointer itself, as the virtual keyboard does */
-	if (pointer_active && !keyboard_active && browser_screen_active())
+	/* Online Games takes the pointer itself, as the virtual keyboard does
+	(and the clipboard invite's question, over it) */
+	if (pointer_active && !keyboard_active && invite_prompt_active())
+		invite_prompt_pointer(&pointer);
+	else if (pointer_active && !keyboard_active && browser_screen_active())
 		browser_screen_pointer(&pointer);
 #endif
 	if (!pointer_active || keyboard_active
 #ifdef HALO_GAME_BROWSER
 		/* (nor over Online Games: a click left in the queue would pick a game) */
-		|| browser_screen_active()
+		|| browser_screen_active() || invite_prompt_active()
 #endif
 		)
 	{
@@ -7381,10 +7501,20 @@ static void widget_instance_render_recursive(
 			box): drawn at their size, from where they place it, in units of
 			that size rather than one to a texel */
 			rectangle2d texels = bounds;
-			short frame_x, frame_y, frame_width, frame_height;
+			short frame_x, frame_y, frame_width, frame_height, texel_y = 0;
 			boolean shown = TRUE;
 
-			if (pc_menu_frame_placement(bitmap, &frame_x, &frame_y, &frame_width, &frame_height))
+			if (pc_menu_button_key_cap(
+				definition->background_bitmap.index,
+				bounds.x0,
+				bounds.y0,
+				bounds.x1,
+				bounds.y1,
+				(float)alpha))
+			{
+				shown = FALSE;
+			}
+			else if (pc_menu_frame_placement(bitmap, &frame_x, &frame_y, &frame_width, &frame_height, &texel_y))
 			{
 				bounds.x0 += frame_x;
 				bounds.y0 += frame_y;
@@ -7396,6 +7526,7 @@ static void widget_instance_render_recursive(
 			}
 			if (shown)
 			{
+				draw_bitmap_texel_y = texel_y;
 				draw_bitmap_in_rect(
 					bitmap,
 					&bounds,
@@ -7404,6 +7535,7 @@ static void widget_instance_render_recursive(
 					color,
 					&multitexture_params,
 					FALSE);
+				draw_bitmap_texel_y = 0;
 			}
 		}
 		if (use_nifty_plasma_fx)
@@ -7601,6 +7733,13 @@ void render_ui_widgets(
 					should_render = TRUE;
 				}
 			}
+#ifdef HALO_GAME_BROWSER
+			/* (Online Games is drawn over the menus' background alone, as a
+			screen of their own: the screen it opened over is not drawn under
+			it, an error dialog still is) */
+			if (should_render && browser_screen_active() && !widget->widget_is_error_dialog)
+				should_render = FALSE;
+#endif
 			if (should_render)
 			{
 				point2d offset;
@@ -7692,7 +7831,10 @@ void render_ui_widgets(
 	if (browser_screen_active())
 		browser_screen_render();
 	if (first_players_render)
+	{
 		moderation_screen_render();
+		invite_prompt_render();
+	}
 #endif
 #ifndef HALO_XBOX_CONSOLE
 	ui_debug_draw_targets(first_players_render);
@@ -7932,6 +8074,30 @@ port/linux/game/menu_functions.c) the screens it shares with one player's
 campaign, New Game's levels and the difficulty, are player 1's (their rows
 the first controller's), and either player's controller uses them: player 1's
 is the one that chose co-op, player 2's the one that chose their profile */
+/* port: whether this machine has, or is adding, a second player
+(port/linux/game/menu_functions.c): co-op, split screen, the lobby's */
+extern unsigned char pc_menu_split_players(void);
+
+/* port: with one person playing, any controller drives the first player's
+menus, not only the first port's: a phone can list a device of its own (its
+touch controls) before the gamepad, which then reads port 2, and a player
+picks up whichever pad is at hand. Its screens read every controller's
+events (ui_widgets_update), and take them (below). With two or more
+players, each controller keeps to its own player's menus */
+static boolean widget_takes_any_controller(
+	struct widget_instance const *widget)
+{
+	return widget->local_player_index == 0 && !pc_menu_split_players() &&
+		(we_are_at_the_main_menu || local_player_count() <= 1);
+}
+
+/* port: the controller whose events a screen reads (NONE: every one's) */
+static short widget_event_controller(
+	struct widget_instance const *widget)
+{
+	return widget_takes_any_controller(widget) ? NONE : widget->local_player_index;
+}
+
 static boolean widget_takes_events_of_controller(
 	struct widget_instance const *widget,
 	short controller_index)
@@ -7940,6 +8106,11 @@ static boolean widget_takes_events_of_controller(
 
 	if (widget->local_player_index == NONE || widget->local_player_index == controller_index)
 		return TRUE;
+	if (widget->local_player_index == 0 && controller_index > 0 &&
+		controller_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS && widget_takes_any_controller(widget))
+	{
+		return TRUE;
+	}
 	if (widget->local_player_index != 0 || !we_are_at_the_main_menu || player_spawn_count < 2 ||
 		controller_index < 0 || controller_index >= MAXIMUM_NUMBER_OF_LOCAL_PLAYERS)
 	{
@@ -8739,6 +8910,16 @@ void process_ui_widgets(
 
 		return;
 	}
+#ifdef HALO_GAME_BROWSER
+	/* port: an invite on the clipboard, asked about over the menus */
+	invite_prompt_update(widget_globals.active_widgets[0] != NULL);
+	if (invite_prompt_active())
+	{
+		invite_prompt_process();
+
+		return;
+	}
+#endif
 #if defined(HALO_GAME_BROWSER) || defined(HALO_XBOX_CONSOLE)
 	if (browser_screen_active())
 	{
@@ -8838,7 +9019,7 @@ void process_ui_widgets(
 			struct event_record event = {0};
 
 			if (widget_globals.processing_inhibited ||
-				!get_next_event(&event, widget->local_player_index))
+				!get_next_event(&event, widget_event_controller(widget)))
 			{
 				/* the widget still gets one empty event so that its animation,
 				auto-close timer and fade keep running */
@@ -8869,7 +9050,7 @@ void process_ui_widgets(
 					if (widget != widget_globals.active_widgets[widget_index])
 						break;
 				}
-				while (get_next_event(&event, widget->local_player_index));
+				while (get_next_event(&event, widget_event_controller(widget)));
 			}
 			widgets_processed = TRUE;
 			if (!widget_globals.active_widgets[widget_index] &&

@@ -1,7 +1,11 @@
 package com.halo.decomp;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
+import android.graphics.drawable.Icon;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -22,6 +26,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
+import java.util.Collections;
 
 /**
  * Starts the game once its data is in place.
@@ -53,11 +58,43 @@ public class LauncherActivity extends Activity {
             new File(dataRoot, "maps").mkdirs();
         passOnHardwareId();
         passOnInvite(getIntent());
+        addImportShortcut();
         if (haveData()) {
-            startGame();
+            if (!offer64BitBuild())
+                startGame();
             return;
         }
         buildInterface();
+    }
+
+    /**
+     * After a start that failed because Android's Java runtime holds the
+     * fixed addresses this build needs (port/android/host/host_main.c writes
+     * memory_map.txt then, and removes it after a start that works): the
+     * native 64-bit build, which needs none, offered in its place. True if
+     * the offer is shown.
+     */
+    private boolean offer64BitBuild() {
+        if (Updater.native64() || dataRoot == null || !new File(dataRoot, "memory_map.txt").isFile())
+            return false;
+        new AlertDialog.Builder(this)
+            .setTitle("This device needs the 64-bit build")
+            .setMessage("The game could not start last time: Android's Java runtime on this device holds the "
+                + "memory this build needs at a fixed address.\n\nThe 64-bit build of the same version needs no "
+                + "fixed address. It installs over this one and keeps your game data and saves.")
+            .setCancelable(false)
+            .setPositiveButton("Get the 64-bit build", (dialog, which) -> {
+                if (BuildConfig.HALO_RELEASE_BUILD) {
+                    Updater.switchTo64Bit(this);
+                } else {
+                    startActivity(new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://github.com/ChupathingyCE/chupathingyce/releases")));
+                    finish();
+                }
+            })
+            .setNegativeButton("Try again", (dialog, which) -> startGame())
+            .show();
+        return true;
     }
 
     /**
@@ -110,6 +147,29 @@ public class LauncherActivity extends Activity {
         }
         if (!partial.renameTo(new File(dataRoot, "hardware_id.txt")))
             partial.delete();
+    }
+
+    /**
+     * "Import maps" on the launcher icon (a long press): Halo PC maps from
+     * the system's file picker (MapImportActivity), for players whose file
+     * manager cannot open the app's folder.
+     */
+    private void addImportShortcut() {
+        try {
+            ShortcutManager shortcuts = getSystemService(ShortcutManager.class);
+            if (shortcuts == null)
+                return;
+            Intent intent = new Intent(this, MapImportActivity.class).setAction(Intent.ACTION_VIEW);
+            ShortcutInfo shortcut = new ShortcutInfo.Builder(this, "import-maps")
+                .setShortLabel("Import maps")
+                .setLongLabel("Import Halo PC maps")
+                .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                .setIntent(intent)
+                .build();
+            shortcuts.setDynamicShortcuts(Collections.singletonList(shortcut));
+        } catch (RuntimeException e) {
+            // (a launcher without shortcuts: the touch controls' Options has the import)
+        }
     }
 
     private boolean haveData() {

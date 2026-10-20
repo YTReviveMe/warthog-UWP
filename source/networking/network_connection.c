@@ -499,6 +499,15 @@ boolean network_connection_connect(
 		return FALSE;
 	}
 	success = TRUE;
+	/* port: a connection made is open, whatever came before it. A write
+	made before connecting (while searching for games, to no socket yet)
+	marked it closed, and every write of the join request then failed. */
+	SET_FLAG(connection->flags, _connection_closed_bit, FALSE);
+	SET_FLAG(connection->flags, _connection_going_stale_bit, FALSE);
+	if (connection->reliable_outgoing_queue)
+	{
+		circular_queue_reset(connection->reliable_outgoing_queue);
+	}
 
 	if (connection->unreliable_endpoint)
 	{
@@ -1094,6 +1103,36 @@ static boolean network_connection_idle_client_reliable_endpoint(
 	return success;
 }
 
+/* port: binds a connection's datagram endpoint to its well-known port. A
+client's does not share the port: if another game on the computer holds it,
+the endpoint takes any free port instead (a second game on one computer),
+and the host answers it at the port its datagrams come from
+(network_server_message_handler.c). A server's must have the well-known one. */
+static boolean network_connection_bind_datagram_endpoint(
+	struct transport_endpoint *endpoint,
+	struct transport_address *address,
+	boolean client)
+{
+	if (client)
+	{
+		set_endpoint_exclusive(endpoint);
+	}
+	if (bind_endpoint(endpoint, address) == _transport_error_none)
+	{
+		return TRUE;
+	}
+	if (client)
+	{
+		address->port = 0;
+		if (bind_endpoint(endpoint, address) == _transport_error_none)
+		{
+			error(_error_silent, "the client port is in use: this game's datagrams use another port");
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 struct network_connection *network_connection_new(
 	unsigned long flags,
 	word well_known_port)
@@ -1202,7 +1241,10 @@ struct network_connection *network_connection_new(
 			address.address.long_words[0] = 0;
 			address.port = well_known_port;
 			connection->well_known_port = well_known_port;
-			if (bind_endpoint(connection->unreliable_endpoint, &address) ||
+			if (!network_connection_bind_datagram_endpoint(
+					connection->unreliable_endpoint,
+					&address,
+					!TEST_FLAG(flags, _connection_create_server_bit)) ||
 				set_endpoint_blocking(connection->unreliable_endpoint, FALSE))
 			{
 				success = FALSE;
@@ -1494,7 +1536,10 @@ boolean network_connection_disconnect(
 		connection->unreliable_address_valid = FALSE;
 		connection->unreliable_endpoint = create_transport_endpoint(_transport_type_udp);
 		success = connection->unreliable_endpoint &&
-			(bind_endpoint(connection->unreliable_endpoint, &address) == _transport_error_none) &&
+			network_connection_bind_datagram_endpoint(
+				connection->unreliable_endpoint,
+				&address,
+				!TEST_FLAG(connection->flags, _connection_create_server_bit)) &&
 			(set_endpoint_blocking(connection->unreliable_endpoint, FALSE) == _transport_error_none);
 	}
 

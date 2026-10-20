@@ -896,7 +896,11 @@ boolean network_distributed_server_send_to_machine(
 	their game updates to) to the client's, at the address its
 	connection comes from (the write swaps the header in place) */
 	network_connection_get_address(connection, &address, NULL);
-	address.port = NETWORK_GAME_CLIENT_PORT;
+	/* port: at the port its last datagram came from (a second game on one
+	computer has one of its own), else the client port */
+	address.port = network_game_server_get_datagram_port(server, machine);
+	if (!address.port)
+		address.port = NETWORK_GAME_CLIENT_PORT;
 	csmemcpy(buffer, message, size);
 	return network_game_server_write(network_game_server_get_connection(server), buffer, size, &address, 0);
 }
@@ -1555,6 +1559,7 @@ boolean network_game_server_handle_datagram(
 									_network_game_packet_class_client_ingame))
 								{
 									network_game_server_client_machine_heard(server, client_machine);
+									network_game_server_note_datagram_port(server, client_machine, source_address->port);
 									network_game_server_handle_client_update_packet(
 										server,
 										client_machine,
@@ -1595,6 +1600,7 @@ boolean network_game_server_handle_datagram(
 						long machine_index;
 
 						network_game_server_client_machine_heard(server, client_machine);
+						network_game_server_note_datagram_port(server, client_machine, source_address->port);
 						network_game_server_get_client_machine(server, client_machine, &machine_index);
 						network_distributed_handle_message(machine_index, message, datagram_size);
 					}
@@ -1680,8 +1686,14 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 	{
 		struct network_game *game = network_game_server_get_game(server);
 
+		/* port: a search from a port other than the client port (a second
+		game on one computer, which the broadcast does not reach) is answered
+		at that port, every time, and does not take the time of the
+		broadcast */
+		boolean direct = source_address->port && source_address->port != NETWORK_GAME_CLIENT_PORT;
+
 		/* (the time taken only by a search answered) */
-		if (game && last_advertised_time && now - last_advertised_time < GAME_ADVERTISEMENT_INTERVAL)
+		if (game && !direct && last_advertised_time && now - last_advertised_time < GAME_ADVERTISEMENT_INTERVAL)
 			return TRUE;
 		if (game)
 		{
@@ -1692,6 +1704,11 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			address.address_length = IPV4_ADDRESS_LENGTH;
 			address.address.long_words[0] = NONE;
 			address.port = NETWORK_GAME_CLIENT_PORT;
+			if (direct)
+			{
+				address.address.long_words[0] = source_address->address.long_words[0];
+				address.port = source_address->port;
+			}
 
 			csmemcpy(
 				advertisement.client_nonce,
@@ -1740,10 +1757,13 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] =
 				HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG;
 #ifdef HALO_GAME_BROWSER
-			/* (and Delta Peer's flag, while this host speaks it: OpenCE's
-			machines ignore the bit; port/linux/src/delta_peer.h) */
+			/* (and Delta Peer's flag, while this host speaks it, with the
+			game wire it plays after the flags: OpenCE's machines ignore
+			both; port/linux/src/delta_peer.h) */
 			{ unsigned char delta_peer_advertised_flags(void);
-			  advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= delta_peer_advertised_flags(); }
+			  void delta_peer_advertised_wire(unsigned char *reserved, int size);
+			  advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= delta_peer_advertised_flags();
+			  delta_peer_advertised_wire(advertisement.reserved, (int)sizeof(advertisement.reserved)); }
 #endif
 			if (network_game_server_get_state(server, NULL) != _network_game_server_state_pregame ||
 				network_game_server_game_is_loading(server))
@@ -1770,7 +1790,8 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 				struct network_connection *connection =
 					network_game_server_get_connection(server);
 
-				last_advertised_time = now ? now : 1;
+				if (!direct)
+					last_advertised_time = now ? now : 1;
 				result = network_game_server_write(
 					connection,
 					reply,

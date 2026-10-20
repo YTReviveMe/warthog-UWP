@@ -90,6 +90,8 @@ their handlers open opens.
 /* (its games on Halo PC maps: server_browser.c) */
 #include "halo_map_families.h"
 #include "halo_server_browser.h"
+/* (the multiplayer maps past the Xbox's: ui_map_list.c) */
+#include "halo_ui_map_list.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -361,6 +363,19 @@ static boolean setting_text(char const *name, char *text, unsigned int size, boo
 				scale = 1;
 			snprintf(text, size, "%ldx%ld", 640 * scale, 480 * scale);
 		}
+		/* (Video Setup's Frame Rate: 30 while display.interpolation is off,
+		the game's own frames, whatever display.max_fps says) */
+		if (!strcmp(name, "display.max_fps"))
+		{
+			char interpolation[16] = "";
+
+			if (default_value)
+				config_default("display.interpolation", interpolation, sizeof(interpolation));
+			else
+				config_text("display.interpolation", interpolation, sizeof(interpolation));
+			if (!strcmp(interpolation, "false"))
+				snprintf(text, size, "30");
+		}
 		return TRUE;
 	}
 	for (index = 0; index < NUMBEROF(profile_settings); index++)
@@ -393,6 +408,11 @@ static boolean setting_write(char const *name, char const *value)
 {
 	short index;
 
+	/* (Video Setup's Frame Rate: 30 draws the game's own frames, with
+	display.interpolation off; the others blend between them) */
+	if (!strcmp(name, "display.max_fps") &&
+		!config_write("display.interpolation", strcmp(value, "30") ? "true" : "false"))
+		return FALSE;
 	if (strncmp(name, "profile.", 8))
 		return config_write(name, value);
 	for (index = 0; index < NUMBEROF(profile_settings); index++)
@@ -999,8 +1019,42 @@ static short map_kind_rows_update(struct widget_instance *list, short *first, sh
 	return row == NONE || row < 1 || row > shown ? NONE : (short)(*first + row - 1);
 }
 
+/* a multiplayer map's string (_ui_map_list_string_*) and picture: the
+Xbox's thirteen their own, the Custom Edition maps after them the menus' map
+list's (ui_map_list.c), which ui_widget.c draws in their place */
+static short multiplayer_map_string(short map, short kind)
+{
+#ifdef HALO_CUSTOM_EDITION
+	return ui_map_list_string_index(map, kind);
+#else
+	return map;
+#endif
+}
+
+static short multiplayer_map_picture(short map)
+{
+#ifdef HALO_CUSTOM_EDITION
+	return ui_map_list_picture_index(map);
+#else
+	return map;
+#endif
+}
+
 static void multiplayer_map_text(short map, wchar_t *text)
 {
+#ifdef HALO_CUSTOM_EDITION
+	wchar_t const *own = ui_map_list_text(ui_map_list_string_index(map, _ui_map_list_string_lobby_name));
+
+	if (own)
+	{
+		long length;
+
+		for (length = 0; own[length] && length < ROW_TEXT_LENGTH - 1; length++)
+			text[length] = own[length];
+		text[length] = 0;
+		return;
+	}
+#endif
 	string_get("pc\\main_menu\\mp_map_list", map, text);
 }
 
@@ -1026,11 +1080,11 @@ static void map_description_show(struct widget_instance *description, short leve
 	if (map == NONE)
 		return;
 	if ((widget = named(description, "mp_map_right_name", 0)) != NULL)
-		widget->parameters.text_box.string_list_index = map;
+		widget->parameters.text_box.string_list_index = multiplayer_map_string(map, _ui_map_list_string_lobby_name);
 	if ((widget = named(description, "mp_map_right_pic", 0)) != NULL)
-		widget->animation.current_frame_index = map;
+		widget->animation.current_frame_index = multiplayer_map_picture(map);
 	if ((widget = named(description, "mp_map_right_data", 0)) != NULL)
-		widget->parameters.text_box.string_list_index = map;
+		widget->parameters.text_box.string_list_index = multiplayer_map_string(map, _ui_map_list_string_description);
 }
 
 /* New Game's list: SINGLEPLAYER's levels, the profile's reached, or
@@ -1372,6 +1426,23 @@ static void settings_help(struct widget_instance *list)
 		if (label != NONE)
 			index = label + 1;
 	}
+	/* (Button Layout set to Bumper Jumper: its own help, after the rows': the
+	last string, one for each row before it) */
+	if (index && row)
+	{
+		struct widget_instance *spinner = named(row, "button_preset_spinner", 0);
+
+		if (spinner && spinner->parameters.list.selected_index == _button_preset_bumper_jumper)
+		{
+			struct widget_instance *each;
+			short rows = 0;
+
+			for (each = list->child; each; each = each->next)
+				if (each->child && each->child->type == 1 && strncmp(each->name, "button", 6))
+					rows++;
+			index = (short)(rows + 1);
+		}
+	}
 	help->parameters.text_box.string_list_index = index;
 }
 
@@ -1494,9 +1565,10 @@ profile's button settings as the Xbox's Controller Setup shows them */
 /* the picture's frames (the bitmap's: tools/port_settings.py's
 BITMAP_FRAMES): Gamepad Setup's row's, as the list numbers its rows
 (player_profile_edit_select_menu_update_extended_description), and after
-the PC version's nine the Xbox's five of the button settings */
+the PC version's nine and Privacy's (FRAME_COPIES) the Xbox's five of the
+button settings */
 #define PROFILE_GAMEPAD_FRAME 2
-#define PROFILE_FIRST_LAYOUT_FRAME 9
+#define PROFILE_FIRST_LAYOUT_FRAME 10
 
 /* "port gamepad layout preview" (the picture's own): on Gamepad Setup's
 row, the edited profile's button settings */
@@ -1506,11 +1578,37 @@ static void profile_gamepad_layout(struct widget_instance *picture)
 	short frame = picture->animation.current_frame_index;
 
 	if (frame == PROFILE_GAMEPAD_FRAME ||
-		(frame >= PROFILE_FIRST_LAYOUT_FRAME && frame < PROFILE_FIRST_LAYOUT_FRAME + NUMBER_OF_BUTTON_PRESETS))
+		(frame >= PROFILE_FIRST_LAYOUT_FRAME && frame < PROFILE_FIRST_LAYOUT_FRAME + _button_preset_bumper_jumper))
 	{
-		picture->animation.current_frame_index = (short)(PROFILE_FIRST_LAYOUT_FRAME +
-			(profile && profile->controller_settings.button_preset < NUMBER_OF_BUTTON_PRESETS ?
-				profile->controller_settings.button_preset : _button_preset_standard));
+		/* (the Xbox's map has a picture for its five layouts: Bumper Jumper's
+		is the plain gamepad's) */
+		if (profile && profile->controller_settings.button_preset == _button_preset_bumper_jumper)
+			picture->animation.current_frame_index = PROFILE_GAMEPAD_FRAME;
+		else
+			picture->animation.current_frame_index = (short)(PROFILE_FIRST_LAYOUT_FRAME +
+				(profile && profile->controller_settings.button_preset < _button_preset_bumper_jumper ?
+					profile->controller_settings.button_preset : _button_preset_standard));
+	}
+}
+
+/* the Chupathingy menus' settings picture (port/assets/menus/chupathingy):
+a frame for each of its eleven rows, then the Xbox's five button settings,
+which Gamepad Setup's row shows for the edited profile */
+#define CHUPATHINGY_FIRST_LAYOUT_FRAME 11
+
+/* "chupathingy settings picture" (the picture's own) */
+static void chupathingy_settings_picture(struct widget_instance *picture)
+{
+	struct player_profile *profile = player_ui_get_edit_player_profile();
+
+	if (picture->animation.current_frame_index == PROFILE_GAMEPAD_FRAME)
+	{
+		if (profile && profile->controller_settings.button_preset == _button_preset_bumper_jumper)
+			picture->animation.current_frame_index = PROFILE_GAMEPAD_FRAME;
+		else
+			picture->animation.current_frame_index = (short)(CHUPATHINGY_FIRST_LAYOUT_FRAME +
+				(profile && profile->controller_settings.button_preset < _button_preset_bumper_jumper ?
+					profile->controller_settings.button_preset : _button_preset_standard));
 	}
 }
 
@@ -1597,7 +1695,13 @@ static void profile_row_text(short row, wchar_t *text)
 	}
 	else
 	{
-		string_get("pc\\main_menu\\player_profiles_select\\profile_description_labels", 4, text);
+		extern boolean pc_menus_chupathingy(void);
+
+		/* (the Chupathingy menus' list is narrower: chupathingy/profiles.xml) */
+		if (pc_menus_chupathingy())
+			string_get("pc\\chupathingy\\profiles\\new_row", 0, text);
+		else
+			string_get("pc\\main_menu\\player_profiles_select\\profile_description_labels", 4, text);
 	}
 }
 
@@ -1817,6 +1921,9 @@ static struct
 	{ "controls.flashlight", L"FLASHLIGHT", 2 },
 	{ "controls.scoreboard", L"SHOW SCORES", 2 },
 	{ "controls.pause", L"PAUSE MENU", 2 },
+	{ "controls.chat_all", L"CHAT", 2 },
+	{ "controls.chat_team", L"TEAM CHAT", 2 },
+	{ "controls.chat_log", L"CHAT LOG", 2 },
 };
 
 static struct
@@ -2152,6 +2259,8 @@ void ui_widget_port_post_button(short controller_index, short button_index);
 
 static wchar_t const *const engine_names[] = { L"", L"CTF", L"SLAYER", L"ODDBALL", L"KING OF THE HILL", L"RACE" };
 static short const maximum_players[] = { 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128 };
+/* the most players a hosted game starts with (16), up to the list's 128 */
+#define HOST_DEFAULT_MAXIMUM_PLAYERS_INDEX 4
 
 static struct
 {
@@ -2188,7 +2297,7 @@ static struct
 	/* Server Setup's PASSWORD (a public internet game's; empty: none), kept
 	while the game runs, never written down */
 	char game_password[PASSWORD_LENGTH + 1];
-} multiplayer = { .maximum_players_index = NUMBEROF(maximum_players) - 1 };
+} multiplayer = { .maximum_players_index = HOST_DEFAULT_MAXIMUM_PLAYERS_INDEX };
 
 /* ---- a text field (Direct Link's link, the game's name): the keyboard
 types into it (Ctrl+V pastes), its row's A (enter) is done, B (escape)
@@ -3010,7 +3119,8 @@ static void browser_games_read(void)
 			struct advertised_game *game = &games[index];
 
 			if (network_game_client_advertised_game_is_valid(game) && !advertised_in_progress(game) == (pass == 0) &&
-				game_from_peer(game) == (multiplayer.mode == _multiplayer_mode_direct_link))
+				game_from_peer(game) == (multiplayer.mode == _multiplayer_mode_direct_link) &&
+				(game_from_peer(game) || !browser_map_is_campaign(game->map_name)))
 			{
 				multiplayer.games[multiplayer.game_count++] = game;
 			}
@@ -3179,7 +3289,7 @@ static void map_display_name(char const *map_name, wchar_t *text)
 	{
 		if (!_stricmp(scenario_name(names[index]), scenario_name(map_name)))
 		{
-			string_get("pc\\main_menu\\mp_map_list", index, text);
+			multiplayer_map_text(index, text);
 			return;
 		}
 	}
@@ -3441,6 +3551,9 @@ static short lobby_browser_valid_games(struct p2p_listing *games, short count)
 		wchar_t name[P2P_LISTING_NAME_SIZE + 1];
 		short index;
 
+		/* (no co-op games in a server browser) */
+		if (browser_map_is_campaign(games[read].map))
+			continue;
 		text_to_wide(games[read].name, name, NUMBEROF(name));
 		if (!player_name_clean(name, NUMBEROF(name)))
 			continue;
@@ -3592,12 +3705,19 @@ static void lobby_browser_add_listed(void)
 {
 	/* (its gametypes as a listing names them) */
 	static char const *const gametypes[] = { "Game", "CTF", "Slayer", "Oddball", "King", "Race" };
-	short index;
+	short index, kept;
 
 	lobby_browser_listed.count = 0;
 	if (!config_boolean("network.online") || !config_boolean("network.public_lobby"))
 		return;
 	lobby_browser_listed.count = (short)browser_get_games(lobby_browser_listed.games, BROWSER_MAXIMUM_GAMES);
+	/* (no co-op games in a server browser) */
+	for (index = kept = 0; index < lobby_browser_listed.count; index++)
+	{
+		if (!browser_map_is_campaign(lobby_browser_listed.games[index].map))
+			lobby_browser_listed.games[kept++] = lobby_browser_listed.games[index];
+	}
+	lobby_browser_listed.count = kept;
 	for (index = 0; index < lobby_browser_listed.count; index++)
 	{
 		struct browser_game const *listed = &lobby_browser_listed.games[index];
@@ -3636,11 +3756,23 @@ static void lobby_browser_add_listed(void)
 		engine = (short)PIN(listed->engine, 0, NUMBEROF(gametypes) - 1);
 		snprintf(game->gametype, sizeof(game->gametype), "%s%s", listed->teams && engine != 1 ? "Team " : "",
 			gametypes[engine]);
+		/* (a campaign level is a co-op game, whatever variant its host had chosen last) */
+		if (campaign_level_of(game->map) != NONE)
+		{
+			static char const *const difficulties[] = { "Easy", "Normal", "Heroic", "Legendary" };
+
+			engine = 0;
+			if (listed->difficulty >= 1 && listed->difficulty <= NUMBEROF(difficulties))
+				snprintf(game->gametype, sizeof(game->gametype), "Co-op (%s)", difficulties[listed->difficulty - 1]);
+			else
+				snprintf(game->gametype, sizeof(game->gametype), "Co-op");
+		}
 		game->player_count = (unsigned char)PIN(listed->players, 0, 255);
 		game->maximum_player_count = (unsigned char)PIN(listed->maximum_players, 0, 255);
 		game->engine_type = (unsigned char)engine;
 		game->open = listed->open;
 		game->has_teams = listed->teams;
+		game->version = listed->version;
 		game->ping = -1;
 	}
 }
@@ -3868,7 +4000,7 @@ static void lobby_browser_update(struct widget_instance *list)
 		text_set(named(row, "server_item_players", 0), text);
 		/* (no ping yet: its host is reached only on joining) */
 		text_set(named(row, "server_item_ping", 0), game->failed ? L"FAILED" : !game->open ? L"CLOSED" :
-			game->in_progress ? L"LIVE" : L"-");
+			game->in_progress ? L"LIVE" : L"");
 		/* (the lock: a game with a password. Its bitmap's first frame is
 		empty, the PC version's for no lock; the next is the lock, in the
 		menus' blue) */
@@ -4069,7 +4201,8 @@ static boolean lobby_browser_select(struct widget_instance *widget, short contro
 	{
 		wchar_t blocked[ROW_TEXT_LENGTH * 2];
 
-		if (server_browser_map_blocked(game->map, blocked, NUMBEROF(blocked)))
+		if (server_browser_map_blocked(game->map, blocked, NUMBEROF(blocked)) &&
+			!server_browser_map_downloadable(game->map))
 		{
 			lobby_browser_message(blocked);
 			return campaign_fail();
@@ -4393,6 +4526,19 @@ static boolean pause_end_game(void)
 	if (!global_network_game_server_get() || !game_engine_running())
 		return campaign_fail();
 	game_engine_end_game();
+	return TRUE;
+}
+
+/* "port pause change teams" (a team game's pause menu's CHANGE TEAMS, Halo
+PC's): the menu's player asks to be put on the other team (team_change.c,
+which tells them what came of it); the menu closes either way */
+static boolean pause_change_teams(struct widget_instance *widget)
+{
+	extern boolean team_change_ask(short local_player_index);
+
+	if (!game_engine_running())
+		return campaign_fail();
+	team_change_ask(widget->local_player_index);
 	return TRUE;
 }
 
@@ -4737,9 +4883,10 @@ static void lobby_map_show(struct widget_instance *description, char const *map_
 	visible_set(named(description, "replay_level_right_pic", 0), level != NONE);
 	visible_set(named(description, "replay_level_right_name", 0), level != NONE);
 	if ((widget = named(description, "lobby_map_pic", 0)) != NULL)
-		widget->animation.current_frame_index = map;
+		widget->animation.current_frame_index = map < count ? multiplayer_map_picture(map) : map;
 	if ((widget = named(description, "lobby_map_name", 0)) != NULL)
-		widget->parameters.text_box.string_list_index = map;
+		widget->parameters.text_box.string_list_index = map < count ?
+			multiplayer_map_string(map, _ui_map_list_string_lobby_name) : map;
 	if (level == NONE)
 		return;
 	if ((widget = named(description, "replay_level_right_pic", 0)) != NULL)
@@ -5778,6 +5925,10 @@ boolean pc_menu_event_function_invoke(
 		{
 			return pause_end_game();
 		}
+		else if (!strcmp(name, "port pause change teams"))
+		{
+			return pause_change_teams(widget);
+		}
 		else if (!strcmp(name, "player profile save changes"))
 		{
 			return profile_save_changes(widget, widget_deleted);
@@ -6047,4 +6198,6 @@ void pc_menu_game_data_function_invoke(
 		saved_game_list_update(widget);
 	else if (!strcmp(name, "port gamepad layout preview"))
 		profile_gamepad_layout(widget);
+	else if (!strcmp(name, "chupathingy settings picture"))
+		chupathingy_settings_picture(widget);
 }

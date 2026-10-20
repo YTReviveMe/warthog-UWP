@@ -53,6 +53,8 @@ OBJECTS.C
 #include "sound/game_sound.h"
 #include "structures/structure_bsp_definitions.h"
 #include "units/units.h"
+/* port: object_bounds_cache.c's */
+void object_bounds_cache_update(long object_index, real_point3d const *center, real radius);
 
 /* ---------- constants */
 
@@ -2950,6 +2952,8 @@ void object_compute_node_matrices(
 	{
 		object->object.bounding_sphere_radius *= object->object.scale;
 	}
+	/* port: (and in the packed copy collision reads: object_bounds_cache.c) */
+	object_bounds_cache_update(object_index, &object->object.bounding_sphere_center, object->object.bounding_sphere_radius);
 
 	return;
 }
@@ -3833,6 +3837,8 @@ static boolean object_update(
 	struct object_definition *object_definition = object_definition_get(object->definition_index);
 
 	boolean result = TRUE;
+	boolean elevator_sampled = FALSE;
+	real_point3d elevator_sample;
 	if (!TEST_FLAG(header->flags, _object_header_do_not_update_bit))
 	{
 		if (TEST_FLAG(object->object.flags, _object_garbage_bit))
@@ -3850,6 +3856,10 @@ static boolean object_update(
 			}
 		}
 
+		/* port: an elevator's node, before the machine moves it (machine_elevator_carry_riders) */
+		elevator_sampled = object->object.type == _object_type_machine &&
+			machine_elevator_sample(object_index, &elevator_sample);
+
 		object_type_update(object_index);
 		if (object_definition->object.collision_model.index!=NONE)
 		{
@@ -3861,6 +3871,11 @@ static boolean object_update(
 		if (!TEST_FLAG(object->object.flags, _object_do_not_recompute_node_matrices_bit))
 		{
 			object_compute_node_matrices(object_index);
+		}
+
+		if (elevator_sampled)
+		{
+			machine_elevator_carry_riders(object_index, &elevator_sample);
 		}
 
 		object_compute_function_values(object_index);
@@ -4670,6 +4685,23 @@ static void object_name_list_new(
 			TAG_BLOCK_GET_ELEMENT(&global_scenario_get()->object_names, name_index, struct scenario_object_name)->name);
 	}
 
+	return;
+}
+
+/* the name is free: deleting the vehicle that held it cleared the slot.
+A name something else still holds stays with that object. */
+void object_claim_scenario_name(
+	long object_index,
+	short name_index)
+{
+	if (object_index == NONE ||
+		!VALID_INDEX(name_index, MIN(global_scenario_get()->object_names.count, MAXIMUM_OBJECT_NAMES_PER_SCENARIO)) ||
+		object_name_list[name_index] != NONE)
+	{
+		return;
+	}
+
+	object_name_list_new(object_index, name_index);
 	return;
 }
 

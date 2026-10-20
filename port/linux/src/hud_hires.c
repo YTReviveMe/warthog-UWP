@@ -6,7 +6,7 @@ uploaded, and each one's GL texture.
 
 Which bitmap is at an address the game knows (from the loaded map's tags:
 port/linux/game/hud_hires_tags.c). Each texture is uploaded from its PNG when
-first drawn and kept: up to 69 of the HUD's, about 225 MB with their mip
+first drawn and kept: up to 84 of the HUD's, about 80 MB with their mip
 levels, though a game draws only some (the scopes' only when zoomed), and
 the titles of the menus shown, about 3 MB each (11 MB for the carnage
 report's, a whole panel). The HUD's PNGs in a map are decoded as it loads,
@@ -96,19 +96,40 @@ long hud_hires_asset_fits(long asset, long width, long height)
 		embedded->width / width == embedded->height / height && embedded->width / width > 1;
 }
 
-long hud_hires_override_find(unsigned long address, unsigned long width, unsigned long height,
-	unsigned long level0_size)
+static int hud_enabled, titles_enabled;
+static unsigned long settings_changes;
+
+/* the settings read again when the configuration has changed, counted when
+either is not as it was */
+static void settings_read(void)
 {
-	static int hud_enabled, titles_enabled;
 	static unsigned long read_at = (unsigned long)-1;
-	long asset;
 
 	if (read_at != config_changes())
 	{
+		int hud = config_boolean("display.high_res_hud");
+		int titles = config_boolean("display.high_res_text");
+
+		if (read_at != (unsigned long)-1 && (hud != hud_enabled || titles != titles_enabled))
+			settings_changes++;
 		read_at = config_changes();
-		hud_enabled = config_boolean("display.high_res_hud");
-		titles_enabled = config_boolean("display.high_res_text");
+		hud_enabled = hud;
+		titles_enabled = titles;
 	}
+}
+
+unsigned long hud_hires_settings(void)
+{
+	settings_read();
+	return settings_changes;
+}
+
+long hud_hires_override_find(unsigned long address, unsigned long width, unsigned long height,
+	unsigned long level0_size)
+{
+	long asset;
+
+	settings_read();
 	if (!hud_enabled && !titles_enabled)
 		return -1;
 	asset = hud_hires_asset_at(address, (long)width, (long)height);
@@ -142,7 +163,7 @@ int hud_hires_override_coverage(long asset)
 
 int hud_hires_override_point_threshold(long asset)
 {
-	return asset >= 0 && (unsigned long)asset < hud_hires_embedded_count && hud_hires_embedded[asset].point_threshold;
+	return asset >= 0 && asset < hud_hires_asset_count() && hud_hires_embedded[asset].point_threshold;
 }
 
 /* ---------- decoding */
@@ -418,7 +439,7 @@ void hud_hires_map_loaded(const long *assets, long count)
 #if defined(HALO_SERVER) || defined(HALO_ANDROID)
 	/* (the dedicated server draws nothing; Android, whose memory is the
 	tightest, decodes each when first drawn: holding a map's decoded HUD
-	pictures takes about 130 MB more at once) */
+	pictures takes about 60 MB more at once) */
 	(void)assets;
 	(void)count;
 	return;

@@ -25,12 +25,15 @@ load, so this stays simple rather than clever.
 #include <string.h>
 #include <sys/mman.h>
 
-/* (above Custom Edition maps' tag cache, platform.h) */
+/* (above Custom Edition maps' tag cache and the room above it, platform.h) */
 #define XBOX_HEAP_BASE 0x42000000U
 #define XBOX_HEAP_END 0x7f000000U
 #define HEAP_MAGIC 0x68656170U /* 'heap' */
 #define SMALL_CLASS_COUNT 13 /* 16 bytes .. 64 KB of payload */
 #define LARGE_GRANULARITY 0x10000U
+
+typedef char verify_heap_above_ce_tag_cache[PLATFORM_CE_TAG_CACHE_BASE + PLATFORM_CE_TAG_CACHE_SIZE +
+	PLATFORM_CE_CONVERSION_ROOM_SIZE <= XBOX_HEAP_BASE ? 1 : -1];
 
 struct heap_block
 {

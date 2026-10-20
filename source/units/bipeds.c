@@ -281,10 +281,6 @@ symbols in this file:
 objects on the host's word alone) */
 boolean network_objects_may_delete(long object_index);
 
-/* port: an unarmed player's melee's length, in ticks (a weapon's is about
-this: its first person melee animation, sped up a quarter) */
-#define UNARMED_MELEE_TICKS 16
-
 /* ---------- constants */
 
 enum
@@ -534,6 +530,17 @@ boolean debug_biped_limp_body_disable = FALSE;
 boolean rider_ejection = TRUE;
 
 static struct profile_section biped_update_section = {"biped_update", NONE, TRUE};
+
+/* port: coop_scripts.c sets this around one teleport */
+static boolean biped_fix_ignores_players;
+
+void biped_fix_ignore_players(
+	boolean ignore)
+{
+	biped_fix_ignores_players = ignore;
+
+	return;
+}
 
 extern boolean debug_objects_biped_autoaim_pills;
 extern boolean debug_objects_biped_physics_pills;
@@ -1158,8 +1165,10 @@ boolean biped_fix_position(
 				_collision_test_for_bipeds_passthrough_living_flags :
 				_collision_test_for_bipeds_living_flags;
 			/* port: (where it fits among the other players, as it moves:
-			_biped_physics_in_pass_through_players_bit) */
-			if (biped->unit.player_index != NONE && !network_coop_player_collisions())
+			_biped_physics_in_pass_through_players_bit). A scripted co-op
+			teleport can also stand on a teammate for this one call. */
+			if (biped_fix_ignores_players ||
+				(biped->unit.player_index != NONE && !network_coop_player_collisions()))
 				collision_flags |= FLAG(_collision_test_skip_player_bipeds_bit);
 		}
 
@@ -4337,27 +4346,14 @@ boolean biped_update(
 					biped_index,
 					unit_get(biped_index)->unit.current_weapon_index);
 
-				/* (port: and with no weapon, which prevents it in the
-				Xbox game: a gametype's loadout of none; not from a
-				vehicle's seat, which holds no weapon either) */
-				if (((weapon_index == NONE && biped->unit.parent_seat_index == NONE) ||
-					(weapon_index != NONE && !weapon_prevents_melee_attack(weapon_index))) &&
+				/* with no weapon, weapon_prevents_melee_attack(NONE) is TRUE:
+				an unarmed player cannot melee, as in the retail game */
+				if (!weapon_prevents_melee_attack(weapon_index) &&
 					biped->unit.current_zoom_level==NONE)
 				{
 					short melee_speedup_ticks;
 
 					unit_animation_start_action(biped_index, _unit_animation_action_melee);
-					/* port: a player with no weapon (a gametype's loadout of
-					none) melees too: in a weapon's usual time, the hit
-					halfway (the Xbox game read the timing from the weapon's
-					animations, through a weapon it did not check) */
-					if (weapon_index == NONE)
-					{
-						biped->biped.player_melee_ticks = UNARMED_MELEE_TICKS;
-						biped->biped.player_melee_attack_tick = UNARMED_MELEE_TICKS / 2;
-					}
-					else
-					{
 					weapon_stop_reload(weapon_index);
 					first_person_weapon_message_from_unit(
 						biped_index,
@@ -4373,7 +4369,6 @@ boolean biped_update(
 							_weapon_first_person_animation_time_private_key_frame,
 							_first_person_weapon_animation_melee,
 							NONE);
-					}
 
 					melee_speedup_ticks = biped->biped.player_melee_ticks >> 2;
 					biped->biped.player_melee_ticks -= melee_speedup_ticks;

@@ -12,9 +12,29 @@ Automated system link sessions for testing the netcode without the menus
   makes it short) the next, as the host's button on the scores does. A map
   with a path is that level (custom_maps\a30, a Custom Edition map's), and
   the variant "coop" makes the game network co-op on it, at normal
-  difficulty, as the Map screen does for a campaign level;
+  difficulty, as the Map screen does for a campaign level; a Halo PC map
+  may also be named as the menus name it (putput@ce). Maps joined by
+  "+" (bloodgulch+putput@ce) are the games' maps in turn, the
+  last for the games past them, as a dedicated server's playlist moves its
+  players to the next map;
 - "join" searches for games and joins the first it finds, as picking it in
-  the system link list does.
+  the system link list does;
+- "download:<name>[:<checksum>]" downloads the Custom Edition map <name>
+  from the community map repositories once the main menu is up, as the
+  Online Games screen does when a game needs it (map_download.c; the host's
+  checksum, in hex, when given, is the version it must be), logs the result
+  ("network test: map download ..."), and quits;
+- "find:<name>" looks for the Custom Edition map <name> as a game on it
+  does (map_family_find: a hashed name's map by its base name too), logs
+  the file found ("network test: find ...") once the main menu is up, and
+  quits;
+- "offer:<name>[:<checksum>]" shows the Online Games screen's offer of that
+  map over the main menu, as a join left for want of it does
+  (browser_screen_map_missing), for its panel to be seen and driven;
+- "browse" opens the Online Games screen once the main menu is up, as the
+  Multiplayer menu's ONLINE GAMES does, and logs each listed game's ping
+  every few seconds (measured or estimated, never an address), for the
+  pings before joining to be seen.
 
 Once the game runs, every second each machine logs where every player's
 unit is, so the machines' views of the game can be compared.
@@ -29,7 +49,8 @@ seconds later stands them at a vehicle's driver's entrance, where a joining
 machine's player holds the action button, as getting in does)
 and debug.network_test_pickup (the last player stands on a weapon lying
 about that many seconds in, and a joining machine's player holds the action
-button a second later, to pick it up).
+button a second later, to pick it up). debug.network_test_team_change has
+each machine's player ask to change teams every so often (team_change.c).
 
 Called from the main loop every frame (main.c).
 */
@@ -56,10 +77,17 @@ Called from the main loop every frame (main.c).
 #include "scenario/scenario.h"
 #include "tag_files/tag_files.h"
 #include "camera/observer.h"
+#include "cache/cache_files.h"
+#include "halo_map_families.h"
+#include "../src/map_download.h"
+#ifdef HALO_GAME_BROWSER
+#include "../src/browser.h"
+#endif
 
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* players.c's (not in players.h) */
 boolean player_handle_powerup(long player_index, short powerup_type, short duration);
@@ -84,6 +112,10 @@ enum
 	_network_test_off,
 	_network_test_host,
 	_network_test_join,
+	_network_test_download,
+	_network_test_offer,
+	_network_test_find,
+	_network_test_browse,
 };
 
 static struct
@@ -111,10 +143,35 @@ static struct
 	real shoot_interval;
 	real vehicle_time;
 	real pickup_time;
+	real team_change_interval;
+	/* debug.network_test_pause: the pause menu opened then, once */
+	real pause_time;
+	boolean paused;
+	/* debug.network_test_local_players: this machine's players (split
+	screen), the first driven by the bot */
+	short local_players;
 	char pickup_weapon[64];
 	long score_to_win;
 	long logged_time;
+	/* download: the host's checksum, and the download started */
+	unsigned long download_version;
+	boolean download_started;
 } network_test;
+
+/* the map of the game at the index (of map_name's maps joined by "+", the
+last for the games past them), copied to name */
+static void network_test_map(
+	short index,
+	char *name,
+	size_t size)
+{
+	char const *map = network_test.map_name;
+	char const *next;
+
+	for (; index > 0 && (next = strchr(map, '+')) != NULL; index--)
+		map = next + 1;
+	snprintf(name, size, "%.*s", (int)strcspn(map, "+"), map);
+}
 
 /* the variant at the index of the list (copied to name), FALSE past its end */
 static boolean network_test_variant(
@@ -165,16 +222,77 @@ static void network_test_read_settings(
 	{
 		network_test.mode = _network_test_join;
 	}
+	else if (!strcmp(setting, "browse"))
+	{
+		network_test.mode = _network_test_browse;
+	}
+	else if (!strncmp(setting, "find:", 5) && setting[5])
+	{
+		network_test.mode = _network_test_find;
+		snprintf(network_test.map_name, sizeof(network_test.map_name), "%s", setting + 5);
+	}
+	else if ((!strncmp(setting, "download:", 9) && setting[9]) || (!strncmp(setting, "offer:", 6) && setting[6]))
+	{
+		char *colon;
+
+		network_test.mode = setting[0] == 'd' ? _network_test_download : _network_test_offer;
+		snprintf(network_test.map_name, sizeof(network_test.map_name), "%s", strchr(setting, ':') + 1);
+		colon = strchr(network_test.map_name, ':');
+		if (colon)
+		{
+			*colon = 0;
+			network_test.download_version = strtoul(colon + 1, NULL, 16);
+		}
+	}
 	network_test.start_delay = (real)config_real("debug.network_test_start");
 	network_test.kill_interval = (real)config_real("debug.network_test_kill");
 	network_test.shoot_interval = (real)config_real("debug.network_test_shoot");
 	network_test.vehicle_time = (real)config_real("debug.network_test_vehicle");
 	network_test.pickup_time = (real)config_real("debug.network_test_pickup");
+	network_test.team_change_interval = (real)config_real("debug.network_test_team_change");
+	network_test.pause_time = (real)config_real("debug.network_test_pause");
+	network_test.local_players = (short)MAX(1, MIN(4, config_integer("debug.network_test_local_players")));
 	snprintf(network_test.pickup_weapon, sizeof(network_test.pickup_weapon), "%s",
 		config_string("debug.network_test_pickup_weapon"));
 	network_test.score_to_win = (long)config_integer("debug.network_test_score");
 	if (network_test.mode != _network_test_off)
 		platform_log("network test: %s", setting);
+}
+
+/* download: the map downloaded once the main menu is up, the result logged,
+and the game quit */
+static void network_test_download(
+	boolean main_menu_loaded)
+{
+	struct map_download_progress progress;
+
+	if (!main_menu_loaded)
+		return;
+	if (!network_test.download_started)
+	{
+		network_test.download_started = TRUE;
+		if (!map_download_start(network_test.map_name, (unsigned int)network_test.download_version))
+		{
+			platform_log("network test: map download %s could not start", network_test.map_name);
+			exit(1);
+		}
+		return;
+	}
+	map_download_get(&progress);
+	if (progress.state == MAP_DOWNLOAD_RUNNING)
+		return;
+	if (progress.state == MAP_DOWNLOAD_DONE)
+	{
+		char path[256], map_name[80];
+
+		snprintf(map_name, sizeof(map_name), "%s@ce", network_test.map_name);
+		platform_log("network test: map download %s done; found in its family's folders: %s; downloaded: %s",
+			network_test.map_name, map_family_find(_map_family_custom_edition, network_test.map_name, path,
+			sizeof(path)) ? path : "no", map_is_downloaded(map_name) ? "yes" : "no");
+		exit(0);
+	}
+	platform_log("network test: map download %s failed: %s", network_test.map_name, progress.message);
+	exit(1);
 }
 
 /* appends to a line, cut short when it is full */
@@ -735,6 +853,85 @@ void network_test_update(
 		network_test_read_settings();
 	if (network_test.mode == _network_test_off)
 		return;
+	if (network_test.mode == _network_test_download)
+	{
+		network_test_download(main_menu_loaded);
+		return;
+	}
+	if (network_test.mode == _network_test_find)
+	{
+		if (main_menu_loaded)
+		{
+			char path[256], map_name[80];
+
+			snprintf(map_name, sizeof(map_name), "%s@ce", network_test.map_name);
+			platform_log("network test: find %s: %s (version %08lx)", network_test.map_name,
+				map_family_find(_map_family_custom_edition, network_test.map_name, path, sizeof(path)) ? path : "no",
+				cache_files_map_version(map_name));
+			exit(0);
+		}
+		return;
+	}
+	if (network_test.mode == _network_test_browse)
+	{
+#ifdef HALO_GAME_BROWSER
+		if (main_menu_loaded)
+		{
+			void browser_screen_open(void);
+			boolean browser_screen_active(void);
+
+			network_test.menu_seconds += seconds;
+			if (!network_test.download_started && network_test.menu_seconds > 3.0f)
+			{
+				network_test.download_started = TRUE;
+				browser_screen_open();
+				platform_log("network test: browse: Online Games open");
+			}
+			/* (each game's ping, every 5 seconds: its name and number only) */
+			else if (network_test.download_started && browser_screen_active() &&
+				(long)(network_test.menu_seconds / 5.0f) != (long)((network_test.menu_seconds - seconds) / 5.0f))
+			{
+				struct browser_game games[16];
+				int count = browser_get_games(games, 16);
+				int index;
+
+				for (index = 0; index < count; index++)
+				{
+					char name[BROWSER_NAME_LENGTH + 1];
+					int character;
+
+					for (character = 0; character < BROWSER_NAME_LENGTH && games[index].name[character]; character++)
+						name[character] = games[index].name[character] < 127 ? (char)games[index].name[character] : '?';
+					name[character] = 0;
+					platform_log("network test: browse: %s ping %s%d", name, games[index].ping_estimated ? "~" : "",
+						games[index].ping);
+				}
+			}
+		}
+#endif
+		return;
+	}
+	if (network_test.mode == _network_test_offer)
+	{
+		/* (once, a few seconds after the main menu is up) */
+#ifdef HALO_GAME_BROWSER
+		if (main_menu_loaded && !network_test.download_started)
+		{
+			network_test.menu_seconds += seconds;
+			if (network_test.menu_seconds > 3.0f)
+			{
+				void browser_screen_map_missing(char const *file, unsigned long version);
+				boolean browser_screen_open_map_offer(void);
+
+				network_test.download_started = TRUE;
+				browser_screen_map_missing(network_test.map_name, network_test.download_version);
+				platform_log("network test: offer %s: %s", network_test.map_name,
+					browser_screen_open_map_offer() ? "shown" : "not shown");
+			}
+		}
+#endif
+		return;
+	}
 
 	/* the game running: report (from the start of each game: the next
 	game's time starts over) */
@@ -808,6 +1005,40 @@ void network_test_update(
 			{
 				test_input_hold_action(game_time_get() >= approach_time + TICKS_PER_SECOND &&
 					game_time_get() < approach_time + 4 * TICKS_PER_SECOND);
+			}
+		}
+		/* debug.network_test_pause: the first player's pause menu opened
+		that many seconds in, as START opens it (to see it) */
+		if (network_test.pause_time > 0.0f && !network_test.paused &&
+			game_time_get() >= (long)(network_test.pause_time * TICKS_PER_SECOND))
+		{
+			network_test.paused = TRUE;
+			platform_log("network test: the pause menu opens");
+			ui_widget_load_by_name_or_tag(network_test.local_players > 1 ?
+				"ui\\shell\\multiplayer_game\\pause_game\\2p_pause_game" :
+				"ui\\shell\\multiplayer_game\\pause_game\\1p_pause_game", NONE, NULL, 0, NONE, NONE, NONE);
+		}
+		/* debug.network_test_team_change: every so often a player of each
+		machine asks to change teams, as the pause menu's CHANGE TEAMS does
+		(team_change.c); the joining machine's half an interval later */
+		if (network_test.team_change_interval > 0.0f && game_engine_can_score())
+		{
+			static long asked_period = 0;
+			long interval = MAX(1, (long)(network_test.team_change_interval * TICKS_PER_SECOND));
+			long offset = network_test.mode == _network_test_join ? interval / 2 : 0;
+			long period = MAX(0, game_time_get() - offset) / interval;
+
+			if (period < asked_period)
+				asked_period = period;
+			if (period > asked_period)
+			{
+				asked_period = period;
+				extern boolean team_change_ask(short local_player_index);
+
+				/* (split screen: each player in turn) */
+				platform_log("network test: player %d asks to change teams",
+					(int)(period % network_test.local_players) + 1);
+				team_change_ask((short)(period % network_test.local_players));
 			}
 		}
 		/* debug.network_test_kill: the host kills the last player every so
@@ -938,10 +1169,13 @@ void network_test_update(
 	case _network_test_host:
 		if (!network_test.set_up)
 		{
+			char map[64];
+
 			network_test.set_up = TRUE;
-			main_set_multiplayer_map_name(network_test.map_name);
+			network_test_map(0, map, sizeof(map));
+			main_set_multiplayer_map_name(map);
 			player_ui_fast_setup_network_server();
-			platform_log("network test: hosting %s", network_test.map_name);
+			platform_log("network test: hosting %s", map);
 		}
 		else if (!network_test.started)
 		{
@@ -951,14 +1185,16 @@ void network_test_update(
 			if (!network_test.map_set && network_test.setup_seconds >= 1.0f && global_network_game_server_get())
 			{
 				char path[128];
+				char map[64];
 				char variant_name[64];
 				struct game_variant variant;
 
 				/* (a level of its own path, else a multiplayer map's name) */
-				if (strchr(network_test.map_name, '\\'))
-					snprintf(path, sizeof(path), "%s", network_test.map_name);
+				network_test_map(network_test.variant_index, map, sizeof(map));
+				if (strchr(map, '\\') || strchr(map, '@'))
+					snprintf(path, sizeof(path), "%s", map);
 				else
-					snprintf(path, sizeof(path), "levels\\test\\%s\\%s", network_test.map_name, network_test.map_name);
+					snprintf(path, sizeof(path), "levels\\test\\%s\\%s", map, map);
 				network_test_variant(network_test.variant_index, variant_name, sizeof(variant_name));
 				if (!strcmp(variant_name, "coop"))
 				{
@@ -984,7 +1220,13 @@ void network_test_update(
 				network_test.map_set = TRUE;
 			}
 			if (!network_test.player_added && network_test.setup_seconds >= 2.0f && global_network_game_client_get())
+			{
+				short controller;
+
 				network_test.player_added = network_game_client_add_player(global_network_game_client_get(), 0);
+				for (controller = 1; controller < network_test.local_players; controller++)
+					network_game_client_add_player(global_network_game_client_get(), controller);
+			}
 			if (network_test.setup_seconds >= network_test.start_delay)
 			{
 				network_test.started = TRUE;
@@ -1005,7 +1247,12 @@ void network_test_update(
 				/* (the player joined to multiplayer first, as a player picking
 				their profile: the pregame screen then asks for them every
 				frame until they are in the settings) */
-				player_ui_local_player_joined_multiplayer_game(0);
+				{
+					short controller;
+
+					for (controller = 0; controller < network_test.local_players; controller++)
+						player_ui_local_player_joined_multiplayer_game(controller);
+				}
 				platform_log("network test: searching for games");
 			}
 		}

@@ -738,6 +738,9 @@ void custom_render_nav_point(
 			1.0f-distance*(1.0f/15.0f),
 			0.7) + 0.5f;
 	}
+#ifdef HALO_CUSTOM_EDITION
+	arrow_scale *= hud_bitmap_group_scale(hud_globals->waypoint.arrow_bitmap.index);
+#endif
 
 	matrix4x3_transform_point(
 		&render.frustum.world_to_view,

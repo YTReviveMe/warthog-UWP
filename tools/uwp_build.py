@@ -121,7 +121,8 @@ def generate_uwp_build(n: Writer, sln: Any) -> None:
                     f"{LINUX_DIR}/src/browser_http.h $out_c $out_list"),
            description="UWP POSIX STUBS")
     n.build(outputs=[guest_posix_c, posix_imports], rule="uwp_posix_stubs",
-            implicit=[Path("tools/android_posix_stubs.py"), LINUX_DIR / "src/posix.h"],
+            implicit=[Path("tools/android_posix_stubs.py"), LINUX_DIR / "src/posix.h",
+                      LINUX_DIR / "src/browser_http.h"],
             variables={"out_c": guest_posix_c, "out_list": posix_imports})
 
     imports_s = gen_dir / "imports.s"

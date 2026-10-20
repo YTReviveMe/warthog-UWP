@@ -36,6 +36,28 @@ alone. */
 machines ignore it. Set only while the host's Delta socket is open and
 network.protocol is not "opence" (delta_peer_advertised_flags). */
 #define DELTA_ADVERTISED_FLAG 0x04
+/* ... and with it, after the port's flags in the advertisement's reserved
+bytes, the game wire the host plays: its Delta major (a byte), then
+DELTA_WIRE, zero padded (delta_peer_advertised_wire). OpenCE's machines, and
+hosts built before then, leave the bytes zero. A Delta client joins a host
+of its own major and wire whatever OpenCE number either announces, and
+refuses one of another wire; a host without the bytes, or of another major,
+is joined by its OpenCE number, as before
+(delta_peer_advertised_wire_matches). A host that writes the range bytes puts in the wire there its
+OLDEST COMPATIBLE wire that a released client knows (one that checks
+the bytes for an exact match, as 0.7.5a's does, then joins), and the host's
+own wire and its compatible range follow in the range bytes below. */
+#define DELTA_ADVERTISED_WIRE_OFFSET 3
+#define DELTA_ADVERTISED_WIRE_SIZE 16
+/* ... and after the wire, in the six bytes that were free to the end of the
+advertisement's 0x1A reserved bytes (docs/delta.md, "Wire compatibility
+ranges"): the range's layout version (1), the host's own wire (its number, then
+its letter), its oldest compatible wire (number, letter), and a check byte
+(0xA5 xor the five before). All zero when absent; machines that do not read
+them (OpenCE's, released builds) leave and ignore them (delta_compat.h). */
+#define DELTA_ADVERTISED_RANGE_OFFSET (DELTA_ADVERTISED_WIRE_OFFSET + 1 + DELTA_ADVERTISED_WIRE_SIZE)
+#define DELTA_ADVERTISED_RANGE_SIZE 6
+#define DELTA_ADVERTISED_RANGE_VERSION 1
 
 /* Delta Peer's UDP port: the game's server port (NETWORK_GAME_SERVER_PORT,
 5150) plus this, so 5160. A host listens there; a client sends from any
@@ -77,6 +99,24 @@ enum delta_capability
 	from their player key, and kicks and bans from the game
 	(docs/delta.md, Moderation) */
 	_delta_capability_moderation = 10,
+	/* a host answers Online Games' pings before joining (p2p_probe.c):
+	announced on Delta List only, never offered in a HELLO or WELCOME
+	(docs/delta.md, Pings before joining) */
+	/* Bomb game types (Bomb, Grifball: docs/bomb.md) and their player traits
+	(TRAITS). Room-wide: a host plays a Bomb game type only with machines
+	that agreed to it, and drops any other (delta_peer_machine_lacks) */
+	_delta_capability_bomb = 11,
+	_delta_capability_ping = 12,
+	/* taken by the Bomb builds (Grifball: docs/bomb.md): TRAITS' movement and
+	melee traits, and TRAITS at its own number (22). Never set by this
+	build */
+	_delta_capability_bomb_movement = 13,
+	_delta_capability_bomb_traits = 14,
+	/* changing teams during a game (docs/delta.md, Team changes): a client
+	asks its host (TEAM_REQUEST), the host decides and answers
+	(TEAM_RESULT); the change itself reaches every machine, OpenCE's too,
+	through the game's own player respawn */
+	_delta_capability_team_change = 15,
 
 	NUMBER_OF_DELTA_CAPABILITIES
 };
@@ -96,6 +136,8 @@ enum delta_platform
 	_delta_platform_xbox360 = 7,
 	_delta_platform_wiiu = 8,
 	_delta_platform_switch = 9,
+	/* ports built on ours by others: the PSP (Sheepdog01), the Vita (Lord
+	Birchwood), and the Xbox One/Series in developer mode (warthog-uwp) */
 	_delta_platform_psp = 10,
 	_delta_platform_vita = 11,
 	_delta_platform_xbox_uwp = 12,
@@ -159,9 +201,9 @@ legacy table's "platform_policy" section is to tune them without a release
 	X(_delta_platform_xbox360, 16, 16, 128, 9, 1) \
 	X(_delta_platform_wiiu, 16, 16, 128, 10, 1) \
 	X(_delta_platform_switch, 16, 16, 128, 12, 1) \
-	X(_delta_platform_psp, 128, 128, 128, 0, 1) \
-	X(_delta_platform_vita, 128, 128, 128, 0, 1) \
-	X(_delta_platform_xbox_uwp, 128, 128, 128, 11, 1)
+	X(_delta_platform_psp, 16, 16, 128, 6, 0) \
+	X(_delta_platform_vita, 16, 16, 128, 9, 0) \
+	X(_delta_platform_xbox_uwp, 128, 128, 128, 12, 1)
 
 /* ---------- the legacy number */
 
@@ -170,7 +212,34 @@ legacy table (port/linux/src/delta.c; docs/delta.md, "The legacy table as
 config") has a row of OpenCE numbers for each wire, which CI adds to only
 after a cross-play test of that wire; a build reads its own wire's row alone.
 Give each release that changes what the machines send a new one. */
-#define DELTA_WIRE "chupa-28a"
+#define DELTA_WIRE "chupa-32a"
+
+/* Wire compatibility ranges: the oldest wire each one plays the game with,
+without a desync and without losing what the older wire has (a feature the
+older wire lacks is dropped or unused with it; one it cannot play ends the
+join cleanly). One row for a wire that plays with older ones; a wire with no
+row plays with itself alone. A wire's row is added when the release is made
+and is not changed afterward: an older build cannot learn of a newer row, so
+a host also tells its newer clients its range in the advertisement. The first
+wire a build advertised is DELTA_WIRE_FIRST_ADVERTISED: what a host puts in
+the advertisement's old wire slot is its oldest compatible wire from there on,
+as released clients compare it for an exact match (delta_compat.h). */
+#define DELTA_WIRE_FIRST_ADVERTISED "chupa-29a"
+#define DELTA_WIRE_COMPATIBILITY(X) \
+	X("chupa-29a", "chupa-28a") /* maps by their own names: 29 also takes 28's hashed names and checksums */ \
+	X("chupa-32a", "chupa-28a") /* 30 to 32 are additive; a host of 32 plays with 28 to 31 (docs/delta.md) */
+
+/* how many OpenCE numbers past the one announced (the newest this build, or
+the signed table, has proven) are presumed additive: a client joins their
+hosts from the day OpenCE raises, before a table follows. The built-in
+maximum (HALO_PORT_NETWORK_VERSION_MAXIMUM) is at least the built-in number
+plus this (tools/test_delta.py), and a signed table's row at least its
+announce plus this (delta.c). Such a host's game is played as an additive
+raise is: what the client does not know it drops, and content it can't
+match (a map of another version) ends its join rather than playing on. A
+raise that changes an existing message is breaking: a release follows it
+(docs/delta.md, "The legacy number"). */
+#define DELTA_LEGACY_PRESUMED 1
 
 /* OpenCE's network versions (HALO_PORT_NETWORK_VERSION in its builds), the
 first of its releases with each, and whether the version's change is one the
@@ -201,7 +270,11 @@ command repository's watch adds a row when it follows OpenCE's raise
 	X(25, "build-169", additive) /* units' integrated lights in the object states; a banned machine told so */ \
 	X(26, "build-184", additive) /* internet play's signalling, version 4 (WebRTC, for browsers; p2p_signal.c reads 3 and 4); game messages as 25 */ \
 	X(27, "build-189", additive) /* Custom Edition map sharing's messages (a machine of 26 drops them); game messages as 25 */ \
-	X(28, "build-201", additive) /* no message changed: a script's switch_bsp keeps a multiplayer game's first, the flashlight past the Xbox limits, a second weapon readied while firing (wire chupa-28a) */
+	X(28, "build-201", additive) /* no message changed: a script's switch_bsp keeps a multiplayer game's first, the flashlight past the Xbox limits, a second weapon readied while firing (wire chupa-28a) */ \
+	X(29, "build-206", additive) /* a Custom Edition map by its own name, its hash's first 32 bits its version in the game record (a client of 29 also takes 28's hashed names and header checksums; wire chupa-29a) */ \
+	X(30, "build-206", additive) /* elevator riders carried by the tick's own movement, a host takes only the across of a client's word on a unit riding an elevator (moving, or stood on at rest), a client discards the height of a correction on its elevator up to 4.0 */ \
+	X(31, "build-206", additive) /* the pregame keep-alive's fourth byte pair sent as zero and the packet table's field lists on their own messages, datagrams stamped more than 450 ticks from the sender's latest dropped, client_ready, client_identity and hit reports taken from a stream alone, a second game on one computer (its own port) */ \
+	X(32, "build-244", additive) /* the host's policy on aiming assist for the mouse and keyboard (message 90), a client's input saying whether its player plays co-op without friendly fire (wire chupa-32a) */
 
 /* ---------- the legacy table (port/linux/src/delta.c)
 

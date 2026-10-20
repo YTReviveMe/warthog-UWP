@@ -22,7 +22,22 @@ enum
 	CE_IMAGE_TAG_CACHE_BASE = 0x40440000,
 	CE_IMAGE_TAG_CACHE_SIZE = 0x01700000,
 	CE_TAG_INSTANCE_SIZE = 0x20,
+	/* the most one allocation of the port's converted models and level takes
+	(ce_resources_allocate): a strip of a part's most triangles (ce_models.c),
+	aligned */
+	CE_LARGEST_CONVERSION_ALLOCATION = 0x20000,
 };
+
+/* the room above the tag cache for the port's converted models and level
+(port/linux/src/platform.h): its size, 0 if it is not mapped, and always 0
+on a console or with the console's limits */
+#include "halo_port_limits.h"
+#if defined(HALO_PORT_CONSOLE_LIMITS) || defined(HALO_CONSOLE_LIMITS)
+#define CE_CONVERSION_ROOM 0UL
+#else
+extern unsigned int platform_ce_conversion_room;
+#define CE_CONVERSION_ROOM ((unsigned long)platform_ce_conversion_room)
+#endif
 
 /* ---------- structures */
 
@@ -108,6 +123,14 @@ char const *ce_image_tag_name(struct ce_image const *image, void const *instance
 /* the map being checked refused: the first reason given is kept (and
 logged by ce_map_check); returns FALSE */
 boolean ce_refuse(char const *format, ...);
+
+/* the reason for the refusal that follows (called before ce_refuse), in a
+player's words; only the first, and only before a refusal, is kept */
+void ce_refusal_explain(char const *format, ...);
+
+/* the message for a player about the map ce_map_check refused last ("" if
+it was accepted): the map, and the reason when ce_refusal_explain gave one */
+char const *ce_map_refusal_message(void);
 
 /* whether a map is being checked (ce_map_check) rather than loaded */
 boolean ce_map_checking(void);

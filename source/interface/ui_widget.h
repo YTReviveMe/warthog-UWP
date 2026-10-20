@@ -188,6 +188,9 @@ void draw_string_and_hack_in_icons(
 	short height_adjust,
 	wchar_t const *instring,
 	boolean ignore_icon_color);
+/* port: where the last draw_string_and_hack_in_icons ended, across (its
+cursor's left edge after the last text or icon) */
+extern short draw_string_and_hack_in_icons_end_x;
 void ui_widgets_dispose(
 	void);
 boolean widget_event_function_list_widget_goto_next_item(
@@ -226,6 +229,8 @@ void display_error_abort_to_dashboard(
 	boolean optional);
 void display_error_damaged_media(
 	void);
+void display_error_damaged_media_text(
+	wchar_t const *text);
 void display_errors_deferred_until_cinematic_stop(
 	void);
 void display_scenario_help(

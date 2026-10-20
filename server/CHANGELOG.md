@@ -4,6 +4,36 @@ What changed in the ChupathingyCE Dedicated Server. The server is released
 with the game and has its version; the game's own changes are in its
 release notes.
 
+## Unreleased
+
+- Network versions 30, 31 and 32. Announces 32 and joins as a client hosts
+  of 11 through 33. Redeploy: a legacy table can't follow this one (wire
+  `chupa-32a`).
+- `HALO_NET_BLOCK_MOUSE_AIM_ASSIST` (default `false`): turns the view's
+  magnetism off for players aiming with the mouse, in every game of the
+  server; clients are told when they join and when it changes.
+- Riders of an elevator are carried by its movement of the same tick, and a
+  second game on one computer can play (a client takes any free port).
+
+## 0.7.5b
+
+- No server changes of its own; built from the same code as the game's 0.7.5b.
+
+## 0.7.5a
+
+- OpenCE's network version 29 (build-206). No message changed, but a game
+  on a Custom Edition map names it by the map's own name, and its map
+  version is the first 32 bits of the map's hash (the header checksum
+  before). The server hosts its Custom Edition maps that way.
+- Announces network version 29; joins as a client hosts of 11 through 30.
+  Redeploy: a legacy table can't follow this one (wire `chupa-29a`).
+- A reason for `sv_warn`, `sv_kick` and `sv_ban` is the rest of the line,
+  quoted or not, up to 127 characters (longer ones were refused as "a word
+  is too long" or "too many words"). The web page and the site's commands
+  take reasons that long too.
+- A warning reads "Server warning: <reason>" in the player's game, not
+  "Server warning: Warning: <reason>".
+
 ## 0.7.5
 
 - `sv_name_filter`: players whose name is on the blocked names list

@@ -804,6 +804,12 @@ a datagram is matched to without asking every connection for its address
 (network_game_server_get_client_machine_at_address) */
 static unsigned long network_game_server_client_machine_addresses[MAXIMUM_NETWORK_MACHINE_COUNT];
 
+/* port: the port the last datagram of each joined client machine came from
+(0: none yet), which the host answers its per-tick datagrams at: a second
+game on one computer has a port of its own. Kept only of a datagram from the
+machine's own address (network_game_server_note_datagram_port). */
+static word network_game_server_client_machine_datagram_ports[MAXIMUM_NETWORK_MACHINE_COUNT];
+
 /* port: the update number up to which a machine that has loaded (at the
 start, or joining the game in progress) gets the host's game update every
 tick; after that once a second (network_game_server_update_ticks) */
@@ -1237,6 +1243,7 @@ struct network_game_server *network_game_server_create(
 				server->client_machines[i].machine_index = NONE;
 				server->client_machines[i].flags = 0;
 				network_game_server_client_machine_addresses[i] = 0;
+				network_game_server_client_machine_datagram_ports[i] = 0;
 				network_game_invalidate_machine(&server->game, i);
 			}
 
@@ -1353,7 +1360,11 @@ void network_game_server_dispose(
 		network_connection_delete(server->connection);
 
 #ifdef xbox
+	/* port: native transports flush before closing sockets, and unregistering
+	an XNet key is a stub. Preserve the original grace period on other builds. */
+#if !defined(HALO_WINDOWS) && !defined(HALO_ANDROID) && !defined(__linux__)
 	SleepEx(MILLISECONDS_PER_SECOND, FALSE);
+#endif
 	transport_server_terminate();
 #endif
 
@@ -2145,6 +2156,7 @@ boolean network_game_server_accept_client_machine_into_game(
 					}
 				}
 				network_game_server_client_machine_addresses[machine_index] = address.address.long_words[0];
+				network_game_server_client_machine_datagram_ports[machine_index] = 0;
 				network_game_server_client_machine_join_times[machine_index] = system_milliseconds();
 			}
 			else
@@ -3127,6 +3139,10 @@ boolean server_has_enough_machines(
 	return has_enough_machines;
 }
 
+/* port: a machine joining or leaving is in the game before its player is.
+The countdown used to stop for that, and then start over, so a lobby rarely
+finished. The players already in the game decide. A machine with no player
+can join the game in progress (a player on each machine is only logged). */
 boolean server_ok_to_countdown(
 	struct network_game_server *server)
 {
@@ -3134,7 +3150,7 @@ boolean server_ok_to_countdown(
 	boolean a_player_on_each = server_has_a_player_on_each_machine(server);
 	boolean teams_full = !server_needs_more_teams(server);
 	boolean enough_players = server->game.player_count >= server->game.minimum_players;
-	boolean ok = enough_machines && a_player_on_each && teams_full && enough_players;
+	boolean ok = enough_machines && teams_full && enough_players;
 
 	/* port: a host nobody watches leaves no trace of why its lobby does not
 	start. The reason, logged as it changes (network_event is the engine's
@@ -3155,9 +3171,9 @@ boolean server_ok_to_countdown(
 				teams_full ? "yes" : "NO",
 				(long)server->game.player_count, (long)server->game.minimum_players,
 				server->countdown_state.paused ? "yes" : "no",
-				reason ? " (failed:" : "",
+				!ok ? " (failed:" : "",
 				(reason & 1) ? " machines" : "",
-				reason ? ")" : "");
+				!ok ? ")" : "");
 		}
 	}
 
@@ -3286,29 +3302,62 @@ struct network_game_server_client_machine *network_game_server_get_client_machin
 	unsigned long ip_address)
 {
 	struct network_game_server_client_machine *client_machine = NULL;
+	long pass;
 	long i;
 
 	match_assert(NETWORK_SERVER_MANAGER_FILE, 0x74D, server && ip_address);
 
 	/* port: from the addresses the machines joined from (every datagram
-	asked each machine's connection for its address) */
-	for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
+	asked each machine's connection for its address). A second game on the
+	host's own computer has the host's own machine's address: the machine
+	that is not the host's own comes first, then any. */
+	for (pass = 0; pass < 2 && !client_machine; pass++)
 	{
-		/* (a machine in the game: not a connection that has not joined) */
-		if (network_game_server_client_machine_addresses[i] == ip_address &&
-			network_game_server_client_machine_is_joined_to_game(server, &server->client_machines[i]))
+		for (i = 0; i < MAXIMUM_NETWORK_MACHINE_COUNT; i++)
 		{
-			match_assert(NETWORK_SERVER_MANAGER_FILE, 0x755,
-				server->client_machines[i].connection);
+			/* (a machine in the game: not a connection that has not joined) */
+			if (network_game_server_client_machine_addresses[i] == ip_address &&
+				network_game_server_client_machine_is_joined_to_game(server, &server->client_machines[i]) &&
+				(pass == 1 || !network_game_server_client_machine_is_local(server, &server->client_machines[i])))
+			{
+				match_assert(NETWORK_SERVER_MANAGER_FILE, 0x755,
+					server->client_machines[i].connection);
 
-			client_machine = &server->client_machines[i];
-			break;
+				client_machine = &server->client_machines[i];
+				break;
+			}
 		}
 	}
 
 	/* (none: a datagram from a machine not in the game, which is dropped
 	without a line in the log for each) */
 	return client_machine;
+}
+
+/* port: a datagram of the machine came from this port of its address (the
+lookup by address found it, so the address is its own) */
+void network_game_server_note_datagram_port(
+	struct network_game_server *server,
+	struct network_game_server_client_machine *client_machine,
+	word port)
+{
+	long index = (long)(client_machine - server->client_machines);
+
+	if (port && index >= 0 && index < MAXIMUM_NETWORK_MACHINE_COUNT)
+	{
+		network_game_server_client_machine_datagram_ports[index] = port;
+	}
+}
+
+/* ... and the port to answer it at (0: none known, the client port) */
+word network_game_server_get_datagram_port(
+	struct network_game_server *server,
+	struct network_game_server_client_machine *client_machine)
+{
+	long index = (long)(client_machine - server->client_machines);
+
+	return index >= 0 && index < MAXIMUM_NETWORK_MACHINE_COUNT ?
+		network_game_server_client_machine_datagram_ports[index] : 0;
 }
 
 boolean network_game_server_game_can_start(
@@ -3369,8 +3418,16 @@ void network_game_server_change_map_name(
 		map_name,
 		NETWORK_GAME_MAP_NAME_LENGTH - 1);
 	server->game.map.name[NETWORK_GAME_MAP_NAME_LENGTH - 1] = 0;
-	/* port: a Halo PC map's version (cache_files_map_version) */
-	server->game.map.version = (long)cache_files_map_version(server->game.map.name);
+	/* port: a Halo PC map by its own name, and its version, which says
+	which file of that name it is (cache_files_map_choose) */
+	server->game.map.version = (long)cache_files_map_choose(server->game.map.name, NETWORK_GAME_MAP_NAME_LENGTH);
+	/* (renamed so: this machine plays it by that name too, the file of its
+	version, as its clients do) */
+	if (csstrcmp(server->game.map.name, map_name))
+	{
+		main_set_multiplayer_map_name(server->game.map.name);
+		game_engine_override_map_name(server->game.map.name);
+	}
 
 	if (!network_game_server_send_game_data_pregame(server))
 	{
@@ -3480,6 +3537,7 @@ boolean network_game_server_remove_client_machine_from_game(
 			server->client_machines[i].machine_index = NONE;
 			server->client_machines[i].flags = 0;
 			network_game_server_client_machine_addresses[i] = 0;
+			network_game_server_client_machine_datagram_ports[i] = 0;
 			success = TRUE;
 			break;
 		}
@@ -4129,7 +4187,7 @@ static void network_game_server_cooperative_round(
 	server->game.variant_options.friendly_fire = friendly_fire;
 	csstrncpy(server->game.map.name, network_game_server_cooperative_next_map, sizeof(server->game.map.name) - 1);
 	server->game.map.name[sizeof(server->game.map.name) - 1] = 0;
-	server->game.map.version = (long)cache_files_map_version(server->game.map.name);
+	server->game.map.version = (long)cache_files_map_choose(server->game.map.name, sizeof(server->game.map.name));
 	main_set_multiplayer_map_name(server->game.map.name);
 	server->game.maximum_teams = 1;
 	network_game_server_cooperative_next_map[0] = 0;
@@ -4216,7 +4274,7 @@ static boolean network_game_server_setup_game_from_playlist(
 		network_game_generate_local_machine_name(machine_name);
 		ustrncpy(server->game.name, machine_name, NETWORK_GAME_NAME_LENGTH - 1);
 		server->game.name[NETWORK_GAME_NAME_LENGTH - 1] = L'\0';
-		server->game.map.version = (long)cache_files_map_version(server->game.map.name);
+		server->game.map.version = (long)cache_files_map_choose(server->game.map.name, sizeof(server->game.map.name));
 		server->game.minimum_players = network_game_solo_game() ? 1 : 2;
 		server->game.maximum_players = MAXIMUM_NETWORK_PLAYER_COUNT;
 		network_game_server_port_settings_apply(server);
@@ -4619,7 +4677,13 @@ static boolean network_game_server_have_all_machines_have_precached(
 
 		if (network_game_server_client_machine_is_joined_to_game(server, machine))
 		{
-			boolean client_has_precached = TEST_FLAG(
+			boolean client_has_precached;
+
+			/* port: a machine with no player is joining or leaving. It does
+			not hold the start; it can join the game in progress. */
+			if (!network_game_server_machine_has_players(server, machine->machine_index))
+				continue;
+			client_has_precached = TEST_FLAG(
 				server->client_machines[i].flags,
 				_network_client_machine_precached_bit);
 
@@ -4695,9 +4759,9 @@ static boolean network_game_server_idle_pregame_tasks(
 					server,
 					client_machine);
 			}
-			/* port: a machine that joined and can add no player (the lobby
-			filled after it joined), or adds none, holds the countdown for
-			ever: refused */
+			/* port: a machine that joined and adds no player (the lobby filled
+			after it joined, or it never adds one) is refused, so it does not
+			stay in the lobby */
 			else if (network_game_server_client_machine_is_joined_to_game(server, client_machine) &&
 				!network_game_server_client_machine_is_local(server, client_machine) &&
 				!network_game_server_machine_has_players(server, client_machine->machine_index) &&
@@ -5036,6 +5100,25 @@ void network_game_server_dedicated_start_countdown(
 	}
 
 	return;
+}
+
+/* the dedicated server's lobby skipped (HALO_DEDICATED_SKIP_LOBBY): a short
+countdown, when one may run; TRUE if it started */
+boolean network_game_server_dedicated_start_countdown_now(
+	struct network_game_server *server,
+	long milliseconds)
+{
+	if (!server ||
+		server->state != _network_game_server_state_pregame ||
+		server->countdown_state.paused ||
+		server->countdown_state.active ||
+		!server_ok_to_countdown(server))
+	{
+		return FALSE;
+	}
+	network_game_server_begin_game_start_countdown(server, milliseconds);
+
+	return server->countdown_state.active;
 }
 #endif
 

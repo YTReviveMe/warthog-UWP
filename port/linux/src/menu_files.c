@@ -403,15 +403,22 @@ static int for_this_platform(struct reader *reader, const XML_Char **attributes)
 		{
 			const char *platform = attributes[index + 1];
 
-			if (strcmp(platform, "desktop") && strcmp(platform, "android"))
+			if (strcmp(platform, "desktop") && strcmp(platform, "android") &&
+				strcmp(platform, "uwp") && strcmp(platform, "desktop_uwp") &&
+				strcmp(platform, "android_only") && strcmp(platform, "non_uwp"))
 			{
-				reader_error(reader, "platform=\"%s\" is not \"desktop\" or \"android\"", platform);
+				reader_error(reader, "unknown platform=\"%s\"", platform);
 				return 1;
 			}
-#ifdef HALO_ANDROID
-			return !strcmp(platform, "android");
+#ifdef HALO_XBOX_UWP
+			return !strcmp(platform, "uwp") || !strcmp(platform, "desktop_uwp") ||
+				!strcmp(platform, "android");
+#elif defined(HALO_ANDROID)
+			return !strcmp(platform, "android") || !strcmp(platform, "android_only") ||
+				!strcmp(platform, "non_uwp");
 #else
-			return !strcmp(platform, "desktop");
+			return !strcmp(platform, "desktop") || !strcmp(platform, "desktop_uwp") ||
+				!strcmp(platform, "non_uwp");
 #endif
 		}
 	}

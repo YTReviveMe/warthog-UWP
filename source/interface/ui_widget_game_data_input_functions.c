@@ -354,6 +354,9 @@ symbols in this file:
 #include "saved games/playlist_profile.h"
 #include "text/text_group.h"
 #include "text/unicode.h"
+#ifdef HALO_XBOX_UWP
+#include "tag_files/tag_files.h"
+#endif
 #ifdef HALO_64BIT
 #include "cseries/errors.h"
 #include "interface/ui_widget_instance.h"
@@ -683,7 +686,7 @@ boolean pc_menu_tag(
 static ui_widget_game_data_function game_data_input_function_list[41];
 
 extern struct persistent_game_data_info_view persistant_game_data_info;
-extern struct single_player_level_entry single_player_level_data[10];
+extern struct single_player_level_entry single_player_level_data[NUMBER_OF_SINGLE_PLAYER_LEVELS];
 extern struct cached_player_profile_entry cached_player_profile[3];
 extern struct cached_variant_profile_entry cached_variant_profile[3];
 
@@ -2026,12 +2029,13 @@ static void set_textbox_to_build_number(
 	   the function is unattested. January corroborates: .bss +0x28, referenced only here. */
 	static wchar_t build_number_string[64];
 
-	if (!build_number_string[0])
+	/* port: none: this build's version is drawn at the bottom of the screen
+	instead (main.c's main_version_watermark_render), while this box is (the
+	main menu's alone), and the box stays empty */
 	{
-		ascii_to_wide(
-			"01.01.14.2342",
-			build_number_string,
-			sizeof(build_number_string));
+		extern unsigned long main_version_box_shown;
+
+		main_version_box_shown = system_milliseconds();
 	}
 
 	if (!widget->parameters.text_box.text)
@@ -2264,6 +2268,15 @@ static void player_profile_edit_select_menu_update_extended_description(
 
 	if (index != NONE)
 	{
+#ifdef HALO_XBOX_UWP
+		if (!strcmp(tag_get_name(list_widget->definition_tag_index), "pc\\chupathingy\\settings\\list"))
+		{
+			static short const rows[] = { 0, 1, 2, 4, 5, 8, 10 };
+
+			if (index >= 0 && index < NUMBEROF(rows))
+				index = rows[index];
+		}
+#endif
 		description_definition = ui_widget_definition_get(
 			list_widget->parameters.list.extended_description->definition_tag_index);
 		match_vassert(
@@ -3560,6 +3573,18 @@ static void mutliplayer_settings_select_list_update_displayed_items(
 				label_box->parameters.text_box.text[0xFF] = 0;
 			}
 		}
+	}
+	/* port: the Chupathingy menus' cards add each gametype's rules
+	(port/linux/game/menu_style.c) */
+	for (item_index = 0; item_index < 3 && displayed_item_indices[item_index] != NONE; item_index++)
+	{
+		extern void menu_style_gametype_rules(long profile_index, wchar_t *text, long size);
+		struct widget_instance *label_box = widget_instance_get_nth_child(list_widget, item_index)->child->next->next;
+
+		menu_style_gametype_rules(
+			((long *)list_widget->parameters.list.list_items)[displayed_item_indices[item_index]],
+			label_box->parameters.text_box.text,
+			0x100);
 	}
 	return;
 }

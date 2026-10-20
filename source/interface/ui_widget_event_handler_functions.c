@@ -988,8 +988,7 @@ struct event_handler_globals
 	char const **function_names;
 	long unknown08;
 	long profile_index;
-	char *map_name;
-	char *single_player_levels[9];
+	char *single_player_levels[NUMBER_OF_SINGLE_PLAYER_LEVELS];
 	long last_player1_profile_index;
 	long unknown3C;
 	char *multiplayer_levels[13];
@@ -1336,6 +1335,11 @@ static boolean player_profile_save_changes(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted);
+/* the layout spinner's index that stands for a kept Bumper Jumper, or NONE */
+static long g_button_preset_kept_index = NONE;
+extern struct widget_instance *g_list_widget_watched;
+extern boolean g_list_widget_watched_stepped;
+
 static boolean player_profile_initialize_controller_settings(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -1483,7 +1487,7 @@ static boolean solo_level_initialize_list_single_player(
 /* ---------- globals */
 
 static wchar_t new_campaign_profile_name[12] = { 0 };
-byte single_player_level_data[0x50] = { 0 };
+struct single_player_level_entry single_player_level_data[NUMBER_OF_SINGLE_PLAYER_LEVELS] = { 0 };
 struct persistent_game_difficulty
 {
 	short value;
@@ -1724,8 +1728,8 @@ struct event_handler_globals event_handler_functions =
 	event_handler_function_list.names,
 	0,
 	NONE,
-	"levels\\a10\\a10",
 	{
+		"levels\\a10\\a10",
 		"levels\\a30\\a30",
 		"levels\\a50\\a50",
 		"levels\\b30\\b30",
@@ -1841,7 +1845,7 @@ static boolean new_campaign_decision(
 					error(2, "failed to create new player profile");
 				if (result)
 				{
-					main_set_map_name(event_handler_functions.map_name);
+					main_set_map_name(event_handler_functions.single_player_levels[0]);
 					main_defer_map_map_change();
 				}
 
@@ -2295,7 +2299,7 @@ static boolean start_new_game(
 	boolean *widget_deleted)
 {
 	main_set_difficulty(1);
-	main_set_map_name(event_handler_functions.map_name);
+	main_set_map_name(event_handler_functions.single_player_levels[0]);
 	game_connection_set(0);
 	main_menu_switch_to_single_player();
 	player_ui_remember_player1_profile(0);
@@ -4255,9 +4259,11 @@ static boolean player_profile_initialize_controller_settings(
 		switch (profile->controller_settings.button_preset)
 		{
 		case _button_preset_standard:
+			g_button_preset_kept_index = NONE;
 			option_spinner->parameters.list.selected_index = 0;
 			break;
 		case _button_preset_swap_triggers:
+			g_button_preset_kept_index = NONE;
 			option_spinner->parameters.list.selected_index = 1;
 			break;
 		case _button_preset_swap_a_and_left_trigger:
@@ -4268,6 +4274,16 @@ static boolean player_profile_initialize_controller_settings(
 			break;
 		case _button_preset_swap_b_and_right_thumb:
 			option_spinner->parameters.list.selected_index = 4;
+			break;
+		case _button_preset_bumper_jumper:
+			/* (the Xbox's own list has the five layouts of its map: this one is
+			shown in the PC and Chupathingy menus, and here as the default) */
+			option_spinner->parameters.list.selected_index = 5 < option_spinner->parameters.list.number_of_items ? 5 : 0;
+			/* (shown as the first layout; the stored choice is kept until the
+			player picks another one here) */
+			g_button_preset_kept_index = 5 < option_spinner->parameters.list.number_of_items ? NONE : 0;
+			g_list_widget_watched = option_spinner;
+			g_list_widget_watched_stepped = FALSE;
 			break;
 		default:
 			option_spinner->parameters.list.selected_index = 0;
@@ -4293,7 +4309,7 @@ static boolean solo_level_initialize_list_coop(
 	short highest_difficulties[2];
 	struct ui_widget_definition *definition;
 
-	memset(single_player_level_data, 0, 0x50);
+	memset(single_player_level_data, 0, sizeof(single_player_level_data));
 	{
 		player_ui_get_active_player_profile(0, &profile0);
 		player_profile_get_highest_completed_solo_level(&profile0, &highest_levels[0], &highest_difficulties[0]);
@@ -4305,16 +4321,16 @@ static boolean solo_level_initialize_list_coop(
 
 		for (level_index = 0; level_index < 10; level_index++)
 		{
-			((struct single_player_level_entry *)single_player_level_data)[level_index].map_name = (&event_handler_functions.map_name)[level_index];
+			single_player_level_data[level_index].map_name = event_handler_functions.single_player_levels[level_index];
 			if (profile0.single_player_map_flags[level_index] || level_index == highest_levels[0] + 1 || profile1.single_player_map_flags[level_index] || level_index == highest_levels[1] + 1 || level_index == 0)
 			{
 				unsigned long level_flags;
 
 				level_flags = (char)profile0.single_player_map_flags[level_index] | (char)profile1.single_player_map_flags[level_index];
-				((struct single_player_level_entry *)single_player_level_data)[level_index].unknown5 = (level_flags >> 1) & 1;
-				((struct single_player_level_entry *)single_player_level_data)[level_index].available = TRUE;
-				((struct single_player_level_entry *)single_player_level_data)[level_index].unknown6 = (level_flags >> 2) & 1;
-				((struct single_player_level_entry *)single_player_level_data)[level_index].unknown7 = (level_flags >> 3) & 1;
+				single_player_level_data[level_index].unknown5 = (level_flags >> 1) & 1;
+				single_player_level_data[level_index].available = TRUE;
+				single_player_level_data[level_index].unknown6 = (level_flags >> 2) & 1;
+				single_player_level_data[level_index].unknown7 = (level_flags >> 3) & 1;
 			}
 		}
 	}
@@ -4456,7 +4472,7 @@ static boolean solo_level_set_next_map_name(
 	}
 	if (result == TRUE)
 	{
-		main_set_map_name((&event_handler_functions.map_name)[list_widget->parameters.list.selected_index]);
+		main_set_map_name(event_handler_functions.single_player_levels[list_widget->parameters.list.selected_index]);
 		main_defer_map_map_change();
 	}
 	else
@@ -4900,6 +4916,13 @@ static boolean player_profile_change_controller_settings(
 		while (option_spinner && option_spinner->type != 2)
 			option_spinner = option_spinner->next;
 		match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 3956, option_spinner, "expected 'button config' option spinner list");
+		/* (Bumper Jumper shown as the first layout on a list without it: left
+		as it is unless the player stepped the spinner, Default included) */
+		if (g_button_preset_kept_index != NONE &&
+			profile->controller_settings.button_preset == _button_preset_bumper_jumper &&
+			g_list_widget_watched == option_spinner &&
+			!g_list_widget_watched_stepped)
+			return TRUE;
 		switch (option_spinner->parameters.list.selected_index)
 		{
 		case _button_preset_standard: profile->controller_settings.button_preset = _button_preset_standard; return TRUE;
@@ -4907,6 +4930,7 @@ static boolean player_profile_change_controller_settings(
 		case _button_preset_swap_a_and_left_trigger: profile->controller_settings.button_preset = _button_preset_swap_a_and_left_trigger; return TRUE;
 		case _button_preset_swap_b_and_left_trigger: profile->controller_settings.button_preset = _button_preset_swap_b_and_left_trigger; return TRUE;
 		case _button_preset_swap_b_and_right_thumb: profile->controller_settings.button_preset = _button_preset_swap_b_and_right_thumb; return TRUE;
+		case _button_preset_bumper_jumper: profile->controller_settings.button_preset = _button_preset_bumper_jumper; return TRUE;
 		default: error(2, "unknown button config option selected"); return TRUE;
 		}
 	}
@@ -5975,15 +5999,15 @@ static boolean solo_level_initialize_list_single_player(
 	{
 		unsigned long level_flags;
 
-		((struct single_player_level_entry *)single_player_level_data)[level_index].map_name =
-			(&event_handler_functions.map_name)[level_index];
+		single_player_level_data[level_index].map_name =
+			event_handler_functions.single_player_levels[level_index];
 		if (profile.single_player_map_flags[level_index] || level_index == highest_level + 1 || level_index == 0)
 		{
 			level_flags = (char)profile.single_player_map_flags[level_index];
-			((struct single_player_level_entry *)single_player_level_data)[level_index].unknown5 = (level_flags >> 1) & 1;
-			((struct single_player_level_entry *)single_player_level_data)[level_index].available = TRUE;
-			((struct single_player_level_entry *)single_player_level_data)[level_index].unknown6 = (level_flags >> 2) & 1;
-			((struct single_player_level_entry *)single_player_level_data)[level_index].unknown7 = (level_flags >> 3) & 1;
+			single_player_level_data[level_index].unknown5 = (level_flags >> 1) & 1;
+			single_player_level_data[level_index].available = TRUE;
+			single_player_level_data[level_index].unknown6 = (level_flags >> 2) & 1;
+			single_player_level_data[level_index].unknown7 = (level_flags >> 3) & 1;
 		}
 	}
 
@@ -6004,7 +6028,7 @@ static boolean solo_level_initialize_list_single_player(
 		for (level_index = 0; level_index < 10; level_index++)
 		{
 			if (_stricmp(persistant_game_data_info.map_name,
-				(&event_handler_functions.map_name)[level_index]) == 0)
+				event_handler_functions.single_player_levels[level_index]) == 0)
 			{
 				struct persistent_game_difficulty difficulty = persistant_game_data_info.difficulty;
 				persistant_game_data_info.map_index = (byte)level_index;
@@ -6067,29 +6091,41 @@ boolean ui_online_games_start_server(
 /* port: the PC version's multiplayer menus (port/linux/game/menu_functions.c),
 on our lists rather than the Xbox's spinners: */
 
-/* the multiplayer maps (the Xbox's 13), and the one used last (else 0),
-unless last_used is NULL: it is read from a file of the save root, which the
-menus that name maps each frame need not do */
+/* the multiplayer maps (the Xbox's 13, then the Custom Edition maps of the
+menus' map list), and the one used last (else 0), unless last_used is NULL:
+it is read from a file of the save root, which the menus that name maps each
+frame need not do. Asked with last_used, as a list opens, the maps are looked
+for anew */
 short ui_widget_port_multiplayer_maps(
 	char const *const **names,
 	short *last_used)
 {
 	char map_name[256];
 	short level_index;
+#ifdef HALO_CUSTOM_EDITION
+	short level_count;
+
+	if (last_used || !ui_map_list_count())
+		ui_map_list_refresh(event_handler_functions.multiplayer_levels);
+	level_count = (short)ui_map_list_count();
+	*names = (char const *const *)ui_map_list_names();
+#else
+	short level_count = 13;
 
 	*names = (char const *const *)event_handler_functions.multiplayer_levels;
+#endif
 	if (!last_used)
-		return 13;
+		return level_count;
 	*last_used = 0;
 	if (saved_game_file_retrieve_last_used_multiplayer_map(map_name))
 	{
-		for (level_index = 0; level_index < 13; level_index++)
+		for (level_index = 0; level_index < level_count; level_index++)
 		{
-			if (!_stricmp(map_name, event_handler_functions.multiplayer_levels[level_index]))
+			if (!_stricmp(map_name, (*names)[level_index]))
 				*last_used = level_index;
 		}
 	}
-	return 13;
+	return level_count;
 }
 
 /* the map chosen (as multiplayer_level_select), the server's if there is
@@ -6100,9 +6136,15 @@ boolean ui_widget_port_multiplayer_map_choose(
 	char const *map_name;
 	void *server = global_network_game_server_get();
 
+#ifdef HALO_CUSTOM_EDITION
+	if (level_index < 0 || level_index >= ui_map_list_count())
+		return FALSE;
+	map_name = ui_map_list_names()[level_index];
+#else
 	if (level_index < 0 || level_index >= 13)
 		return FALSE;
 	map_name = event_handler_functions.multiplayer_levels[level_index];
+#endif
 	{
 		char build[0x20];
 
@@ -6117,7 +6159,7 @@ boolean ui_widget_port_multiplayer_map_choose(
 	game_engine_override_map_name(map_name);
 	if (server)
 		network_game_server_change_map_name(server, map_name);
-	saved_game_file_remember_last_used_multiplayer_map(event_handler_functions.multiplayer_levels[level_index]);
+	saved_game_file_remember_last_used_multiplayer_map(map_name);
 	return TRUE;
 }
 

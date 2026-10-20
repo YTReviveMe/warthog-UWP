@@ -44,6 +44,10 @@ ART holds it, those maps do not load and the rest of the game plays as
 usual (port/android/host/host_memory.c) */
 #define HALO_GUEST_CE_TAG_CACHE_BASE 0x40440000u
 #define HALO_GUEST_CE_TAG_CACHE_SIZE 0x01700000u
+/* and the room right above it for the port's converted models and level
+(platform.h's PLATFORM_CE_CONVERSION_ROOM_SIZE), reserved with it if it is
+free too */
+#define HALO_GUEST_CE_CONVERSION_ROOM_SIZE 0x004c0000u
 
 #define HALO_GUEST_MAGIC 0x4f4c4148u /* 'HALO' */
 #define HALO_GUEST_ABI_VERSION 1

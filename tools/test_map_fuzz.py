@@ -74,6 +74,8 @@ CUSTOM_EDITION = [
     "port/linux/game/ce_functions.c",
     "source/bitmaps/bitmaps.c",
     "source/rasterizer/rasterizer_geometry.c",
+    # (ce_hud.c's PNG button icons)
+    *(f"port/third_party/zlib/{name}.c" for name in ("adler32", "crc32", "inffast", "inflate", "inftrees", "zutil")),
 ]
 TARGETS = {
     "xbox": ("MAP_FUZZ_XBOX", VALIDATOR),

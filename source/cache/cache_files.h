@@ -68,6 +68,8 @@ boolean cache_files_give_time_to_precache(
 	char const *map_name);
 char const *cache_file_loaded_map_name(
 	void);
+void const *cache_file_loaded_header(
+	void);
 char const *cache_files_build_region(
 	char const *build);
 char const *cache_files_multiplayer_region(
@@ -80,6 +82,9 @@ void cache_files_show_multiplayer_unavailable(
 	char const *build);
 unsigned long cache_files_map_version(
 	char const *map_name);
+unsigned long cache_files_map_choose(
+	char *map_name,
+	long size);
 boolean cache_files_map_present(
 	char const *map_name,
 	unsigned long version);
@@ -171,6 +176,9 @@ void cache_files_precache_map_queue_end(
 boolean cache_files_precache_map_begin(
 	char const *map_name,
 	boolean copy_map);
+/* port: the error for a map that could not be precached (cache_files_windows.c) */
+void cache_files_display_map_error(
+	char const *map_name);
 
 void cache_file_promote_read(
 	short request_index);
