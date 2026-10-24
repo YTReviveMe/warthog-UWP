@@ -1,7 +1,7 @@
 # Warthog UWP for Xbox Developer Mode
 
-Xbox Developer Mode port of the current Warthog tree. The original-Xbox
-`ninja xbox` build remains independent; this port uses `ninja uwp_guest`.
+Xbox Developer Mode port of Warthog. This port uses `ninja uwp_guest` for
+the game and CMake for the UWP host.
 
 Install Visual Studio 2022 with C++ UWP tools, Windows SDK 10.0.26100, Python, Ninja, CMake, Clang and LLD. The setup script builds pinned SDL3-UWP sources and fetches Dear ImGui 1.91.9b; provide x64 UWP builds of libuwp, Mesa and zlib.
 
