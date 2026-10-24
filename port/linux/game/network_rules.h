@@ -4,8 +4,10 @@ NETWORK_RULES.H
 The distributed netcode's rules that need no game to decide: what a client
 does with the host's word on its own player standing on an elevator, which
 datagrams are near enough in time to be taken, the bytes of the aim assist
-policy message and of a player's input entry, and which device a player aims
-with. network_distributed.c asks, the unit tests (port/linux/tests/
+policy message and of a player's input entry, which device a player aims
+with, and what versions 33 to 36 changed (the game settings record's size by
+the host's version, the gametype's further options, the host's shield effects
+message, how near a static target's copy must be). network_distributed.c asks, the unit tests (port/linux/tests/
 network_rules_test.c) check the answers byte for byte. Nothing here has a
 dependency but the C library; multi-byte values are little-endian, as on
 every machine the game runs on.
@@ -117,5 +119,138 @@ progress, off the main menu's scene; on the host its own setting, on a client
 what the host last said (blocked until it speaks), never otherwise */
 int network_rules_aim_assist_blocks(int game_in_progress, int main_menu_active, int is_host, int is_client,
 	int host_setting, int client_policy_blocked);
+
+/* ---------- network versions 33 to 36 */
+
+/* the versions that changed what a client does: 34 has shield-only scenery
+and devices as static targets (every machine recharges them, a client
+reports no damage one of them deals, and an event on a copy made during play
+finds the nearest one); 35 has the gametype's further options, the game
+settings record 16 bytes longer; 36 has the host's shield effects message */
+#define NETWORK_RULES_STATIC_SHIELDS_VERSION 34
+#define NETWORK_RULES_EXTENDED_OPTIONS_VERSION 35
+#define NETWORK_RULES_SHIELD_EFFECTS_VERSION 36
+/* (a host's version not known, as for a game joined by an invitation) */
+#define NETWORK_RULES_VERSION_UNKNOWN 0xFFFF
+
+/* the game settings record at the network's 128 machines and 128 players:
+11 to 34, and 35 on (the gametype's options grow from 0x1C to 0x2C bytes, in
+front of the record's last 4, its local data) */
+#define NETWORK_RULES_SETTINGS_SIZE 13120
+#define NETWORK_RULES_EXTENDED_OPTIONS_SIZE 16
+#define NETWORK_RULES_SETTINGS_EXTENDED_SIZE (NETWORK_RULES_SETTINGS_SIZE + NETWORK_RULES_EXTENDED_OPTIONS_SIZE)
+
+/* the further options' bytes (0x1C to 0x2B of the gametype's options) */
+enum
+{
+	NETWORK_RULES_OPTION_MODE = 0,
+	NETWORK_RULES_OPTION_HARDCORE,
+	NETWORK_RULES_OPTION_FIRST_ZOMBIES,
+	NETWORK_RULES_OPTION_ZOMBIE_SPEED,
+	NETWORK_RULES_OPTION_SKULL_DAMAGE,
+	NETWORK_RULES_OPTION_ZOMBIE_RESPAWN,
+	NETWORK_RULES_OPTION_COUNTDOWN,
+	NETWORK_RULES_OPTION_ZOMBIE_SHIELDS,
+	NETWORK_RULES_OPTION_WEAPON_ORDER,
+	NETWORK_RULES_OPTION_MELEE_DEMOTES,
+	/* (then 6 reserved bytes, 0) */
+};
+
+/* the mode byte: OpenCE's game types played on the Slayer engine */
+enum
+{
+	NETWORK_RULES_MODE_NONE = 0,
+	NETWORK_RULES_MODE_SWAT,
+	NETWORK_RULES_MODE_INFECTION,
+	NETWORK_RULES_MODE_GUN_GAME,
+	NETWORK_RULES_NUMBER_OF_MODES
+};
+
+/* the host's shield effects (message 91, reliable, to a client): the header,
+the effects as a 16-bit value (0 stock to 5) and 16 bits that are 0 */
+#define NETWORK_RULES_SHIELD_EFFECTS_KIND 91
+#define NETWORK_RULES_SHIELD_EFFECTS_SIZE 12
+#define NETWORK_RULES_SHIELD_EFFECTS_MAXIMUM 5
+
+/* how far (world units) past a static target's bounding sphere a host's
+event on another copy of one reaches, before an area effect's cutoff */
+#define NETWORK_RULES_STATIC_EVENT_REACH 2.0f
+/* ... and a client's hit report on its own copy reaches past the host's
+nearest one's (a host's matching) */
+#define NETWORK_RULES_STATIC_REPORT_REACH 1.0f
+
+/* the size of the game settings record a client takes from a host of the
+version (the network's slots): 0 for a version not known, whose record
+may be either */
+int network_rules_settings_size(unsigned version);
+/* whether a record whose pieces say total_size is the one a host of the
+version sends: of a known version only its own size, of one not known
+either size */
+int network_rules_settings_size_taken(unsigned version, unsigned total_size);
+/* a record of version 35 on (NETWORK_RULES_SETTINGS_EXTENDED_SIZE bytes, as
+the wire has it) made the older layout in place: the 16 further option bytes
+into extended, and the local data moved up after the first 0x1C */
+void network_rules_settings_fold_options(uint8_t *record, uint8_t *extended);
+
+/* the further options of a gametype that has none of its own (an older
+host's, an older saved file's) */
+void network_rules_extended_options_default(uint8_t *options);
+/* the further options as every machine takes them: a mode past Gun Game
+none, each flag 0 or 1, a ranged byte outside its range its default (not
+held to the range), a weapon order past random strongest first, the
+reserved bytes 0 */
+void network_rules_extended_options_sanitize(uint8_t *options);
+/* which of OpenCE's game types the (sanitized) options play on a variant:
+the mode only on the Slayer engine (SWAT on any, Infection with teams alone,
+Gun Game free for all alone), else NETWORK_RULES_MODE_NONE; hardcore (on any
+engine) in *hardcore */
+int network_rules_extended_options_mode(uint8_t const *options, int slayer, int teams, int *hardcore);
+
+/* writes the shield effects message (NETWORK_RULES_SHIELD_EFFECTS_SIZE bytes,
+a reliable data message of one entry); effects past the last are stock */
+void network_rules_shield_effects_write(uint8_t *message, int effects, int32_t game_time);
+/* checks a message that came from the host as network_rules_aim_assist_read
+does: the size, the data type, kind 91, one entry, effects 0 to 5, the 16
+bits after them 0, not from a datagram. Returns whether to take it, and in
+*effects what it says. */
+int network_rules_shield_effects_read(uint8_t const *message, int size, int from_datagram, int *effects);
+
+/* (a client) how far past a static target's bounding sphere the host's event
+on another copy of one reaches: NETWORK_RULES_STATIC_EVENT_REACH, and an area
+effect's cutoff radius (area: the damage is an area effect's, of a damage
+effect definition) */
+float network_rules_static_event_reach(int area, float cutoff_radius);
+/* whether a copy at distance_squared from the point, of the bounding sphere
+radius, is within the reach of it (both ends included) */
+int network_rules_static_within(float distance_squared, float radius, float reach);
+
+/* ---------- a host's side of network versions 34 and 35
+
+A host announces one number (delta_legacy_announce), and an OpenCE machine
+joins only a host of its own, so an OpenCE machine of the game is of that
+number. A Delta machine says in its HELLO the newest version whose rules it
+plays (DELTA_LEGACY_NEWEST; builds before 35 their own number, 32 or older),
+and plays by the host's advertised number up to it. */
+
+/* (a host) the size of the game settings record it sends a machine of its
+game (13,120 or 13,136 bytes), of announce, the number it announces;
+delta_version, the number the machine's HELLO said (0: none: an OpenCE
+machine, or a Delta one whose HELLO has not come); waiting, whether a HELLO
+may still come. 0: wait for it. A host of 34 or older sends every machine
+the older record at once. */
+int network_rules_host_settings_size(unsigned announce, unsigned delta_version, int waiting);
+/* (a host) whether a machine's players report the damage a static target
+deals (a tripmine's going off; network version 34): an OpenCE machine of a
+host of 34 on does not, nor a Delta machine that takes 35's record from the
+host (one that may be of 34 alone, joined by an invitation, is taken to
+report: then the damage is lost, never dealt twice) */
+int network_rules_host_static_damage_reported(unsigned announce, unsigned delta_version);
+/* the bytes offset to offset + length of the record of 35's layout made
+from the older one (record, NETWORK_RULES_SETTINGS_SIZE bytes as the wire
+has it) and the 16 further option bytes (extended), into out: the older
+record's bytes but its last 4, then the further ones, then those 4 (its
+local data) */
+void network_rules_settings_extended_copy(uint8_t const *record, uint8_t const *extended, int offset, int length,
+	uint8_t *out);
 
 #endif /* __NETWORK_RULES_H */

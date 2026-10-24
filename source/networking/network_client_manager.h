@@ -37,6 +37,7 @@ short network_game_client_get_state(
 	short *state_data);
 boolean network_game_client_join_first_available_game(
 	void);
+boolean network_game_client_split_teams(void);
 boolean network_game_client_set_team(
 	char team_index);
 /* whether the advertised game's host has this machine's network version
@@ -106,6 +107,9 @@ short network_game_client_get_machine_index(
 /* port: the joined game's host's network version (0xFFFF: not known) */
 unsigned int network_game_client_host_network_version(
 	void);
+/* port: ... where it was not known, the version it showed it is at least */
+void network_game_client_note_host_network_version(
+	unsigned int version);
 boolean network_game_client_advertised_game_is_valid(
 	struct network_advertised_game *advertised_game);
 struct network_advertised_game *network_game_client_get_available_games(

@@ -9,7 +9,8 @@ link games as if they were on one LAN, without a server of this project's.
   other key can be found to have; the first 6 are the machine's identifier,
   which its XNADDR also carries) and a random 16-byte token. A machine
   makes one when its game starts hosting (the game listens for
-  connections), logs it and puts it on the clipboard. Only a public game's
+  connections), logs it, and puts it on the clipboard when
+  network.copy_to_clipboard says so (sdl_platform.c). Only a public game's
   is published (the server browser: p2p_lobby.c; and its Join game button
   on Discord: p2p_discord.c): without an invite there is no way to find or
   join a private game.
@@ -62,6 +63,7 @@ only look up and create stand-ins.
 #include "delta.h"
 #include "log_address.h"
 #include "ikcp.h"
+#include "thread_stop.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -120,7 +122,13 @@ enum
 	sending from ever new ports has a few a second, not one a datagram */
 	PROXY_REPLACE_TIME = 1000,
 	MAXIMUM_STUN_SERVERS = 4,
+#ifndef P2P_JOINER_ONLY
 	STREAM_BUFFER_SIZE = 16384,
+#else
+	/* (a message of the stream, 1.2 KB at most, is what it takes in: the
+	original Xbox's eight streams hold 64 KB, not 128 KB) */
+	STREAM_BUFFER_SIZE = 8192,
+#endif
 	STREAM_CHUNK_SIZE = 1024,
 	/* the most unacknowledged messages a stream sends ahead */
 	STREAM_WINDOW = 128,
@@ -151,6 +159,11 @@ enum
 	/* where a running copy of the game takes invites from another one
 	started to open a link (127.0.0.1), sealed with a key of the user's */
 	HANDOFF_PORT = 47315,
+	/* the game's ports (network_game_protocol.h): a host's, and the one a
+	client's datagrams come from unless another game on the computer holds
+	it (network_connection.c) */
+	GAME_SERVER_PORT = 0x141E,
+	GAME_CLIENT_PORT = 0x141F,
 };
 
 enum
@@ -207,6 +220,11 @@ struct peer
 	unsigned long endpoint_heard_time;
 	unsigned long sent_time;
 	unsigned long round_trip;
+	/* the port the game's client sends this peer's game from when it is not
+	GAME_CLIENT_PORT (network byte order; 0: that port): a host of before
+	OpenCE's network version 31 answers a client at GAME_CLIENT_PORT
+	whatever port it sent from, which datagram_received takes there */
+	unsigned short moved_client_port;
 };
 
 /* a UDP stand-in for one port of a peer */
@@ -369,7 +387,29 @@ static struct
 
 /* the proxy (its index + 1) with each local port (all of theirs are on
 p2p.local_address) */
+#ifndef P2P_JOINER_ONLY
 static unsigned short proxy_by_port[65536];
+#define PROXY_BY_PORT(port) proxy_by_port[port]
+#define PROXY_BY_PORT_SET(port, value) (proxy_by_port[port] = (unsigned short)(value))
+#else
+/* (the stand-in of a port, 1 more than its index, or 0: a machine that only
+joins has a few stand-ins, which a search finds, not a 128 KB table) */
+static unsigned short proxy_by_port_search(unsigned short port);
+#define PROXY_BY_PORT(port) proxy_by_port_search(port)
+#define PROXY_BY_PORT_SET(port, value) ((void)(port), (void)(value))
+
+static unsigned short proxy_by_port_search(unsigned short port)
+{
+	int index;
+
+	for (index = 0; index < MAXIMUM_PROXIES; index++)
+	{
+		if (p2p.proxies[index].socket >= 0 && p2p.proxies[index].local_port == port)
+			return (unsigned short)(index + 1);
+	}
+	return 0;
+}
+#endif
 
 static unsigned char identifier[P2P_IDENTIFIER_SIZE];
 /* this run's X25519 keys, which the identifier comes from: from an Ed25519
@@ -453,14 +493,23 @@ static int hex_value(char digit)
 	return -1;
 }
 
+/* (host and network byte order: the same on a big-endian machine) */
 static unsigned long network_long(unsigned long value)
 {
+#ifdef HALO_BIG_ENDIAN
+	return value;
+#else
 	return __builtin_bswap32(value);
+#endif
 }
 
 static unsigned short network_short(unsigned short value)
 {
+#ifdef HALO_BIG_ENDIAN
+	return value;
+#else
 	return (unsigned short)(value << 8 | value >> 8);
+#endif
 }
 
 static void put_short(unsigned char *bytes, unsigned short value)
@@ -1438,7 +1487,7 @@ static void proxy_close(struct proxy *proxy)
 	if (proxy->socket < 0)
 		return;
 	close_socket(&proxy->socket);
-	proxy_by_port[proxy->local_port] = 0;
+	PROXY_BY_PORT_SET(proxy->local_port, 0);
 	remember_closed(0, proxy->local_port, proxy->peer, proxy->remote_port);
 	for (entry = 0; entry < peer->proxy_count; entry++)
 	{
@@ -1503,7 +1552,7 @@ static struct proxy *find_proxy(int peer_index, unsigned short remote_port, int 
 	free_proxy->used_time = p2p_now();
 	free_proxy->pinned_socket = -1;
 	peer->proxies[peer->proxy_count++] = (short)(free_proxy - p2p.proxies);
-	proxy_by_port[free_proxy->local_port] = (unsigned short)(free_proxy - p2p.proxies + 1);
+	PROXY_BY_PORT_SET(free_proxy->local_port, free_proxy - p2p.proxies + 1);
 	forget_closed(0, free_proxy->local_port);
 	return free_proxy;
 }
@@ -1635,9 +1684,9 @@ int p2p_incoming(int stream, unsigned long *address, unsigned short *port)
 			}
 		}
 	}
-	else if (proxy_by_port[*port])
+	else if (PROXY_BY_PORT(*port))
 	{
-		struct proxy const *proxy = &p2p.proxies[proxy_by_port[*port] - 1];
+		struct proxy const *proxy = &p2p.proxies[PROXY_BY_PORT(*port) - 1];
 
 		*address = p2p.peers[proxy->peer].virtual_address;
 		*port = proxy->remote_port;
@@ -1857,6 +1906,14 @@ static int game_port_open(int stream, unsigned short port)
 
 /* ---------- datagrams */
 
+/* the port the game's client reaches the peer's game from (a datagram from
+source_port to the peer's port): kept when it is not the client port */
+static void note_client_port(struct peer *peer, unsigned short source_port, unsigned short port)
+{
+	if (port == network_short(GAME_SERVER_PORT))
+		peer->moved_client_port = source_port == network_short(GAME_CLIENT_PORT) ? 0 : source_port;
+}
+
 /* a datagram from the game's port source_port to the peer's port, as the
 tunnel carries it (inner); its size, -1 if it cannot be */
 static int datagram_inner(unsigned short source_port, unsigned short port, const void *data, int size,
@@ -1925,6 +1982,8 @@ static void game_datagram_send(struct peer *peer, unsigned short source_port, un
 #ifdef P2P_SEND_FROM_THREAD
 	int index;
 
+	note_client_port(peer, source_port, port);
+
 	if (queued_datagram_count >= MAXIMUM_QUEUED_DATAGRAMS)
 		return;
 	index = (queued_datagram_first + queued_datagram_count) % MAXIMUM_QUEUED_DATAGRAMS;
@@ -1934,6 +1993,7 @@ static void game_datagram_send(struct peer *peer, unsigned short source_port, un
 	memcpy(queued_datagrams[index].identifier, peer->identifier, P2P_IDENTIFIER_SIZE);
 	queued_datagram_count++;
 #else
+	note_client_port(peer, source_port, port);
 	datagram_send(peer, source_port, port, data, size);
 #endif
 }
@@ -1957,6 +2017,7 @@ static void proxy_readable(struct proxy *proxy)
 		if (from.sin_addr.s_addr != p2p.local_address && from.sin_addr.s_addr != network_long(0x7F000001))
 			continue;
 		proxy->used_time = p2p_now();
+		note_client_port(&p2p.peers[proxy->peer], from.sin_port, proxy->remote_port);
 		datagram_send(&p2p.peers[proxy->peer], from.sin_port, proxy->remote_port, data, size);
 	}
 }
@@ -1975,9 +2036,18 @@ static void datagram_received(struct peer *peer, const unsigned char *inner, int
 {
 	struct proxy *proxy;
 	struct sockaddr_in to;
+	unsigned short port = size >= 5 ? get_short(inner + 3) : 0;
 
+	/* (a host of before OpenCE's network version 31 answers at the client
+	port: to the port the game's client sent from, when another game on this
+	computer holds that one) */
+	if (port == network_short(GAME_CLIENT_PORT) && !game_port_open(0, port) && peer->moved_client_port &&
+		game_port_open(0, peer->moved_client_port))
+	{
+		port = peer->moved_client_port;
+	}
 	/* only to the game */
-	if (size < 5 || !game_port_open(0, get_short(inner + 3)))
+	if (size < 5 || !game_port_open(0, port))
 	{
 #ifdef P2P_TRACE_DATAGRAMS
 		p2p_trace_datagram(size >= 5 ? get_short(inner + 1) : 0, size >= 5 ? get_short(inner + 3) : 0, size, -1);
@@ -1992,9 +2062,9 @@ static void datagram_received(struct peer *peer, const unsigned char *inner, int
 #endif
 		return;
 	}
-	make_address(&to, p2p.local_address, get_short(inner + 3));
+	make_address(&to, p2p.local_address, port);
 #ifdef P2P_TRACE_DATAGRAMS
-	p2p_trace_datagram(get_short(inner + 1), get_short(inner + 3), size,
+	p2p_trace_datagram(get_short(inner + 1), port, size,
 		posix_socket_sendto(proxy->socket, inner + 5, size - 5, 0, &to, sizeof(to)) >= 0);
 #else
 	posix_socket_sendto(proxy->socket, inner + 5, size - 5, 0, &to, sizeof(to));
@@ -2522,6 +2592,25 @@ unsigned long p2p_public_address(void)
 	return result;
 }
 
+/* a game is being joined, whichever way (a listed game, an invite, a direct
+address, the local network, a server's change of game): the invite stays
+only if the host is the invite's, its identifier the one p2p_identifier_from_hash
+gives; any other join forgets it, so a report of the game never goes out
+under another game's invite */
+void p2p_joining_host(const unsigned char *identifier)
+{
+	unsigned char host[P2P_IDENTIFIER_SIZE];
+
+	pthread_mutex_lock(&p2p_lock);
+	p2p_identifier_from_hash(p2p.join_host_hash, host);
+	if (memcmp(host, identifier, P2P_IDENTIFIER_SIZE))
+	{
+		memset(p2p.join_host_hash, 0, sizeof(p2p.join_host_hash));
+		memset(p2p.join_token, 0, sizeof(p2p.join_token));
+	}
+	pthread_mutex_unlock(&p2p_lock);
+}
+
 /* the code of the invite this machine last joined through (its host's key
 hash and token, in hexadecimal), as a host's p2p_hosting_invite */
 int p2p_joined_invite(char *text, int size)
@@ -2531,7 +2620,9 @@ int p2p_joined_invite(char *text, int size)
 	int result;
 
 	pthread_mutex_lock(&p2p_lock);
-	result = memcmp(p2p.join_host_hash, none, sizeof(none)) != 0 && size > (int)sizeof(code) * 2;
+	/* (not while hosting: a game of its own has no joined invite) */
+	result = !p2p.hosting && memcmp(p2p.join_host_hash, none, sizeof(none)) != 0 &&
+		size > (int)sizeof(code) * 2;
 	if (result)
 	{
 		memcpy(code, p2p.join_host_hash, P2P_KEY_HASH_SIZE);
@@ -2757,9 +2848,10 @@ static void update_hosting(void)
 		{
 			char shown[128];
 
-			/* (whole on the clipboard and in the menus) */
+			/* (whole in the menus, and on the clipboard with
+			network.copy_to_clipboard) */
 			platform_log("Internet play: hosting. Invite players with this link (it only works while this "
-				"copy of the game runs; it is on the clipboard): %s",
+				"copy of the game runs): %s",
 				p2p_invite_log_text(p2p.invite, shown, sizeof(shown)));
 		}
 		if (!p2p.invite_copied)
@@ -2921,7 +3013,6 @@ static void update_upnp(void)
 {
 	static int allowed = -1;
 	int ask;
-	pthread_t thread;
 
 	if (allowed < 0)
 		allowed = config_boolean("network.allow_upnp") ? 1 : 0;
@@ -2940,13 +3031,12 @@ static void update_upnp(void)
 		p2p.upnp_release_registered = 1;
 		atexit(upnp_release);
 	}
-	if (pthread_create(&thread, NULL, upnp_thread, NULL) != 0)
+	if (thread_stop_create("internet play UPnP", upnp_thread, NULL) != 0)
 	{
 		p2p.upnp_working = 0;
 		p2p.upnp_time = p2p_now();
 		return;
 	}
-	pthread_detach(thread);
 }
 
 const char *p2p_take_clipboard_text(void)
@@ -3074,7 +3164,10 @@ static void handoff_readable(void)
 	p2p_invite_received(invite);
 }
 
-#ifdef HALO_ANDROID
+/* (not on the Switch, which builds as Android too: there is no app to write
+the file, and the Switch host has no renameat, so the look every second
+fails and fills the log) */
+#if defined(HALO_ANDROID) && !defined(HALO_SWITCH_CONSOLE)
 /* the app's activity writes a link it was opened with here */
 static void poll_invite_file(void)
 {
@@ -3386,7 +3479,9 @@ static void *p2p_thread(void *unused)
 	/* (here: it may wait for a program) */
 	p2p_register_url_scheme("halo", "Halo: Combat Evolved invite");
 #endif
-	for (;;)
+	/* (until the game's end asks the platform layer's threads to stop,
+	thread_stop.h: a pass at most LOOP_INTERVAL * 5 away) */
+	while (!thread_stop_requested())
 	{
 		int read_count = 0, write_count = 0, error_count = 0;
 		int asked_read_count, asked_write_count;
@@ -3567,17 +3662,17 @@ static void *p2p_thread(void *unused)
 		p2p_discord_set_join(p2p.hosting && p2p.has_token && p2p_lobby_open() ?
 			p2p.invite + strlen("halo://join/") : NULL);
 		p2p_discord_update();
-#ifdef HALO_ANDROID
+#if defined(HALO_ANDROID) && !defined(HALO_SWITCH_CONSOLE)
 		poll_invite_file();
 #endif
 	}
+	pthread_mutex_unlock(&p2p_lock);
 	return NULL;
 }
 
 void p2p_initialize(unsigned long local_address)
 {
 	char invite[256];
-	pthread_t thread;
 	long tunnel_port = config_integer("network.tunnel_port");
 	int index;
 
@@ -3608,7 +3703,13 @@ void p2p_initialize(unsigned long local_address)
 		/* all of a host's traffic, up to a 128-machine game's, goes through
 		this one socket: buffers as large as the game's own sockets' (at
 		least 1 MB, transport_endpoint_winsock.c) */
+#ifndef P2P_JOINER_ONLY
 		int size = 1 << 20;
+#else
+		/* (the console's, 32 KB: it only joins one host's game of 16
+		players, and XNet's buffers are the console's memory) */
+		int size = 32 * 1024;
+#endif
 
 		posix_socket_setsockopt(p2p.tunnel_socket, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
 		posix_socket_setsockopt(p2p.tunnel_socket, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
@@ -3621,13 +3722,12 @@ void p2p_initialize(unsigned long local_address)
 		p2p.handoff_socket = open_socket(SOCK_DGRAM, network_long(0x7F000001), network_short(HANDOFF_PORT), NULL);
 #endif
 	stun_setup();
-	if (pthread_create(&thread, NULL, p2p_thread, NULL) != 0)
+	if (thread_stop_create("internet play", p2p_thread, NULL) != 0)
 	{
 		close_socket(&p2p.tunnel_socket);
 		close_socket(&p2p.handoff_socket);
 		return;
 	}
-	pthread_detach(thread);
 	p2p.running = 1;
 	if (pending_startup_invite[0])
 	{

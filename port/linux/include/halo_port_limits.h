@@ -16,17 +16,34 @@ a finishing place in 7 bits.
 #ifndef __HALO_PORT_LIMITS_H
 #define __HALO_PORT_LIMITS_H
 
+/* what a console build asks of the shared code (its capabilities) */
+#include "halo_console_features.h"
+
 /* ---------- session limits */
 
-/* The console (port/xbox, HALO_XBOX_CONSOLE) stays the Xbox: 16 players,
-though on as many machines as players, one each, as the native builds'
-players come. HALO_CONSOLE_LIMITS gives a desktop build the console's
-limits, to test the console's side of cross-play against the PC builds on
-one computer (configure.py --console-limits); it is never a release. */
-#if defined(HALO_XBOX_CONSOLE) || defined(HALO_CONSOLE_LIMITS)
+/* A console's build (HALO_CONSOLE_PLAYERS, the original Xbox's) stays the
+Xbox: 16 players, though on as many machines as players, one each, as the
+native builds' players come. HALO_CONSOLE_LIMITS gives a desktop build the
+console's limits, to test the console's side of cross-play against the PC
+builds on one computer (configure.py --console-limits); it is never a
+release. */
+#if defined(HALO_CONSOLE_PLAYERS) || defined(HALO_CONSOLE_LIMITS)
 #define HALO_PORT_CONSOLE_LIMITS 1
+#ifdef HALO_CONSOLE_PLAYERS
+/* HALO_CONSOLE_PLAYERS (configure.py --console-players) is the players the
+console's build takes: 16, the Xbox's, unless a test build asks for 32 or 64
+(which a stock console's memory does not hold: the build says so when it
+starts). The tables of the players, the machines and the tunnel's peers
+(P2P_MAXIMUM_PEERS, p2p_internal.h) are sized by it; a host's game with more
+is left as a full game is (network_client_message_handler.c). */
+#define HALO_PORT_MAXIMUM_NETWORK_PLAYERS HALO_CONSOLE_PLAYERS
+/* one more machine than players: a dedicated host is machine #0, so 16
+players are machines #1 to #16 */
+#define HALO_PORT_MAXIMUM_NETWORK_MACHINES (HALO_CONSOLE_PLAYERS + 1)
+#else
 #define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 16
 #define HALO_PORT_MAXIMUM_NETWORK_MACHINES 16
+#endif
 #else
 #define HALO_PORT_MAXIMUM_NETWORK_PLAYERS 128
 #define HALO_PORT_MAXIMUM_NETWORK_MACHINES 128
@@ -47,6 +64,10 @@ this before any of them is read) */
 /* ---------- memory capacity for these limits (game state and pools) */
 
 #include "halo_port_capacity.h"
+
+/* ---------- the desktop extras a console's build leaves out */
+
+#include "halo_port_features.h"
 
 /* ---------- struct network_game layout
 
@@ -93,14 +114,14 @@ Raise it with any change to what the machines send each other. */
 from it only in what the other machines leave out (a message a machine of
 the other version does not know it drops). Which are which is delta.h's
 table (DELTA_LEGACY_VERSIONS): the minimum is its newest breaking version,
-the maximum its newest or above it: hosts of OpenCE's next versions are
-joined before a release follows them, as most of its raises leave the game's
+the maximum its newest and the next (DELTA_LEGACY_PRESUMED): hosts of
+OpenCE's next versions are joined before a release follows them, as most of its raises leave the game's
 messages as they were (tools/test_delta.py checks them; they stay numbers
 here, which the command repository reads). A host
 never checks a client's version: the client does (network_client_manager.c),
 so the range is the client's. */
 #define HALO_PORT_NETWORK_VERSION_MINIMUM 11
-#define HALO_PORT_NETWORK_VERSION_MAXIMUM 33
+#define HALO_PORT_NETWORK_VERSION_MAXIMUM 37
 /* ... the numbers in use (port/linux/src/delta.c): the three above, until a
 legacy table (docs/delta.md) widens them; code asks these, not the numbers */
 int delta_legacy_announce(void);

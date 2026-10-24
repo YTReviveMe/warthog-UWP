@@ -195,9 +195,12 @@ jobs:
 
       - name: Test
         run: |
-          python3 -m pytest -q tools/test_linux_port.py tools/test_android_asm_convert.py tools/test_touch_menu.py tools/test_p2p_copies.py tools/test_ping.py tools/test_save_folder.py tools/test_server_control.py tools/test_delta.py tools/test_delta_peer.py tools/test_map_download.py tools/test_map_report.py tools/test_event_log.py tools/test_update_manifest.py
+          python3 -m pytest -q tools/test_linux_port.py tools/test_android_asm_convert.py tools/test_touch_menu.py tools/test_ui_point.py tools/test_p2p_copies.py tools/test_ping.py tools/test_save_folder.py tools/test_server_control.py tools/test_delta.py tools/test_delta_peer.py tools/test_map_download.py tools/test_map_families.py tools/test_map_packs.py tools/test_map_report.py tools/test_event_log.py tools/test_update_manifest.py
           python3 tools/test_light_storage.py
           python3 tools/test_port_config.py
+          python3 tools/test_tick_input.py
+          python3 tools/test_controller_layout.py
+          python3 tools/test_button_mappings.py
 
       - name: Compile cache
         run: ccache --show-stats
@@ -582,8 +585,8 @@ jobs:
           key: ccache-android64-${{ github.sha }}
 
   windows:
-    # The runner image has LLVM, Python and Visual Studio's x86 libraries and
-    # Windows SDK.
+    # The runner image has LLVM, Python, MSYS2 (the movies' FFmpeg builds
+    # under its shell) and Visual Studio's x86 libraries and Windows SDK.
     runs-on: windows-2025
     timeout-minutes: 40
     defaults:
@@ -621,6 +624,16 @@ jobs:
         with:
           path: build/windows/third_party
           key: windows-third-party-${{ hashFiles('tools/windows_build.py') }}
+
+      # the movies' FFmpeg (tools/ffmpeg_build.py), built once and cached:
+      # its configure and make run under the runner's MSYS2, which needs make
+      - name: MSYS2 make
+        run: /c/msys64/usr/bin/pacman.exe -S --noconfirm --needed make diffutils
+
+      - uses: actions/cache@v4
+        with:
+          path: build/windows/ffmpeg
+          key: windows-ffmpeg-${{ hashFiles('tools/ffmpeg_build.py') }}
 
       - name: Debug
         run: python tools/ci_build.py windows debug
@@ -708,6 +721,16 @@ jobs:
           path: build/windows/third_party
           key: windows-third-party-${{ hashFiles('tools/windows_build.py') }}
 
+      # the movies' FFmpeg (tools/ffmpeg_build.py), built once and cached:
+      # its configure and make run under the runner's MSYS2, which needs make
+      - name: MSYS2 make
+        run: /c/msys64/usr/bin/pacman.exe -S --noconfirm --needed make diffutils
+
+      - uses: actions/cache@v4
+        with:
+          path: build/windows64/ffmpeg
+          key: windows64-ffmpeg-${{ hashFiles('tools/ffmpeg_build.py') }}
+
       - name: Debug
         run: python tools/ci_build.py windows64 debug
 
@@ -752,7 +775,7 @@ jobs:
   macos:
     # Apple silicon, with Xcode's clang: the universal application (Apple
     # silicon and Intel, self-contained: tools/macos_build.py, --portable),
-    # with its own SDL3, built once and cached. The application goes up as
+    # with its own SDL3 and the movies' FFmpeg, built once and cached. The application goes up as
     # a tar, which keeps its symbolic links and permissions (its signature
     # needs them).
     runs-on: macos-15
@@ -776,7 +799,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: build/macos/third_party
-          key: macos-sdl3-${{ hashFiles('tools/android_build.py', 'tools/macos_build.py') }}
+          key: macos-sdl3-${{ hashFiles('tools/android_build.py', 'tools/macos_build.py', 'tools/ffmpeg_build.py') }}
 
       - name: Debug
         run: python3 tools/ci_build.py macos debug

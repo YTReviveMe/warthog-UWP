@@ -4,7 +4,7 @@ P2P.H
 Internet play (p2p.c): machines that shared an invite reach each other's
 system link games as if they were on one LAN. xnet.c routes the game's
 traffic for them through here; sdl_platform.c passes invite links in and
-out through the clipboard.
+out through the clipboard, as the player's settings allow.
 
 Addresses and ports are in network byte order.
 */
@@ -41,6 +41,7 @@ void p2p_hosting_invite_announced(const char *invite);
 unsigned long p2p_peer_public_address(unsigned long game_address);
 unsigned long p2p_public_address(void);
 int p2p_joined_invite(char *text, int size);
+void p2p_joining_host(const unsigned char *identifier);
 #endif
 #endif
 
@@ -98,7 +99,7 @@ a stream's) */
 void p2p_socket_closed(int socket, unsigned short datagram_port);
 
 /* text for the clipboard (a new invite link), once; NULL if none. Called
-from the main thread */
+from the main thread, which copies it only with network.copy_to_clipboard */
 const char *p2p_take_clipboard_text(void);
 
 /* whether a game this machine hosts may be joined from the internet (an
@@ -195,6 +196,12 @@ way) are one game, kept at its newest version, and of copies of that, the
 last heard (heard_times: p2p_now's); two hosts' games of one version stay
 apart. The game list's rule too (its one_per_version_set) */
 int p2p_listing_older_copy(const struct p2p_listing *games, const unsigned long *heard_times, int count, int index);
+/* p2p_listing_older_copy, for a client that joins versions minimum to
+maximum: games of other versions are kept too (the browser marks them, and
+joins none), but each as a game of their own side of the window only, and
+never beside a copy that is joinable */
+int p2p_listing_hidden_copy(const struct p2p_listing *games, const unsigned long *heard_times, int count, int index,
+	int minimum, int maximum);
 /* a game the browser could not join: kept, marked failed, for this run */
 void p2p_lobby_mark_failed(const unsigned char *identifier);
 /* a locked game's invite (into its invite), if the password is its own:

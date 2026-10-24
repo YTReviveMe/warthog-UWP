@@ -33,9 +33,18 @@ game state; its limits only make a host take fewer players.
 enum
 {
 	/* a game's machines and players (HALO_PORT_MAXIMUM_NETWORK_MACHINES and
-	_PLAYERS) */
+	_PLAYERS): the original Xbox's game keeps 16 players and 17 machines (a
+	dedicated host being machine 0; its 64 MB), so its sessions keep no more
+	either */
+#ifdef HALO_CONSOLE_PLAYERS
+	/* (a console's own count: 16, or a test build's, configure.py
+	--console-players) */
+	DELTA_PEER_MAXIMUM_MACHINES = HALO_CONSOLE_PLAYERS + 1,
+	DELTA_PEER_MAXIMUM_PLAYERS = HALO_CONSOLE_PLAYERS,
+#else
 	DELTA_PEER_MAXIMUM_MACHINES = 128,
 	DELTA_PEER_MAXIMUM_PLAYERS = 128,
+#endif
 	/* a room limit nothing sets */
 	DELTA_PEER_NO_LIMIT = 255,
 
@@ -82,6 +91,8 @@ enum
 	/* the game's map (MAP) is sent to a client at once when it changes, and
 	again this often (a datagram lost) */
 	DELTA_PEER_MAP_INTERVAL = 5000,
+	/* ... and the game's player traits (TRAITS) the same way */
+	DELTA_PEER_TRAITS_INTERVAL = 5000,
 
 	/* moderation (milliseconds where a time): the host takes MOD_ACTION
 	from a machine at most this often (and at once); checks a machine's
@@ -385,12 +396,25 @@ struct delta_peer_host_peer
 	none), and when */
 	delta_u32 map_sent_generation;
 	delta_u32 map_time;
+	/* the game's traits as last sent to it (traits_generation), and when */
+	delta_u32 traits_sent_generation;
+	delta_u32 traits_time;
 	struct delta_peer_host_moderation moderation;
 	struct delta_peer_host_chat chat;
 	/* team changes: the last TEAM_REQUEST's sequence, and their rate */
 	delta_u32 team_sequence;
 	struct delta_rate team_rate;
 };
+
+/* the room for a signed legacy table going out or coming in: the console
+relays none (it sets only the serial hook, to DELTA_WIRE_TABLE_NONE: relaying()
+is false),
+and its 64 MB do not keep 32 KB for one */
+#ifdef HALO_XBOX_CONSOLE
+#define DELTA_PEER_TABLE_BYTES 1
+#else
+#define DELTA_PEER_TABLE_BYTES DELTA_LEGACY_SIGNED_SIZE
+#endif
 
 /* a signed legacy table coming in, piece by piece: one at a time, from one
 machine */
@@ -404,7 +428,7 @@ struct delta_peer_table_in
 	/* the pieces in (bit n: the piece at n * DELTA_WIRE_TABLE_CHUNK) */
 	delta_u32 pieces;
 	delta_u32 time;
-	unsigned char data[DELTA_LEGACY_SIGNED_SIZE];
+	unsigned char data[DELTA_PEER_TABLE_BYTES];
 };
 
 struct delta_peer
@@ -430,6 +454,16 @@ struct delta_peer
 	changes (0: none set) */
 	struct delta_wire_map map;
 	delta_u32 map_generation;
+	/* the game's player traits (delta_peer_set_traits), and a number raised
+	each time they change (0: none set) */
+	struct delta_wire_traits traits;
+	delta_u32 traits_generation;
+	/* each game machine's address and when the host first saw it in the
+	game with it (0 address: not in the game): its handshake's window starts
+	there (delta_peer_machine_lacks) */
+	delta_u32 machine_seen_ipv4[DELTA_PEER_MAXIMUM_MACHINES];
+	delta_u32 machine_seen_time[DELTA_PEER_MAXIMUM_MACHINES];
+	unsigned char machine_seen[DELTA_PEER_MAXIMUM_MACHINES];
 
 	/* the client's */
 	int client_state;
@@ -447,12 +481,16 @@ struct delta_peer
 	none heard) */
 	struct delta_wire_map host_map;
 	delta_u32 host_map_generation;
+	/* the host's traits (TRAITS), and a number raised each time they change
+	(0: none heard) */
+	struct delta_wire_traits host_traits;
+	delta_u32 host_traits_generation;
 
 	/* both: the legacy table relayed; this machine's signed table as it
 	goes out (its serial: 0 not read yet), and one coming in */
 	delta_u32 table_out_serial;
 	int table_out_size;
-	unsigned char table_out[DELTA_LEGACY_SIGNED_SIZE];
+	unsigned char table_out[DELTA_PEER_TABLE_BYTES];
 	struct delta_peer_table_in table_in;
 
 	/* both: what is known of each machine, the room, and each player's
@@ -526,6 +564,31 @@ void delta_peer_set_map(struct delta_peer *peer, const struct delta_wire_map *ma
 each time it changed (0 if none heard: a host without Delta, or that did not
 agree to ce_maps) */
 delta_u32 delta_peer_host_map(const struct delta_peer *peer, struct delta_wire_map *map);
+
+/* the host's: the game's player traits, sent to each client that agreed to
+bomb (NULL: none, nothing sent). Called each frame; traits the same as the
+last change nothing */
+void delta_peer_set_traits(struct delta_peer *peer, const struct delta_wire_traits *traits);
+/* the client's: the host's traits as TRAITS said them last, and the number
+raised each time they changed (0 if none heard) */
+delta_u32 delta_peer_host_traits(const struct delta_peer *peer, struct delta_wire_traits *traits);
+/* the host's: whether a machine of its game lacks a capability: it speaks
+Delta and did not agree to it (at once), or it has said nothing for the
+handshake's window (DELTA_PEER_HANDSHAKE_TIME) since the host first saw it
+in the game (an OpenCE machine, one of another major, or one whose Delta
+cannot reach the host). 0 for one that has it, one still in its window, the
+host's own, or a machine not in the game; a capability this host does not
+offer itself is lacked by every other machine */
+int delta_peer_machine_lacks(const struct delta_peer *peer, delta_u32 now, int machine_index, int capability);
+/* ... and whether one is still in its window: in the game, not the host's,
+no session yet and its window not over (a game that needs the capability
+waits for it) */
+int delta_peer_machine_pending(const struct delta_peer *peer, delta_u32 now, int machine_index);
+/* ... and the OpenCE network version a machine of the game said in its
+HELLO, the newest whose rules it plays (DELTA_LEGACY_NEWEST; earlier builds
+said their HALO_PORT_NETWORK_VERSION, 32 or older): 0 for one without a session
+(an OpenCE machine, or one whose HELLO has not come yet) */
+int delta_peer_machine_legacy_version(const struct delta_peer *peer, int machine_index);
 
 /* ---------- moderation (docs/delta.md, Moderation)
 
@@ -709,6 +772,27 @@ the scoreboard asks this before it shows any) */
 int delta_peer_game_on_delta(void);
 /* a machine's profile claim: its player ID and revision (0 if none) */
 int delta_peer_machine_profile(int machine_index, unsigned char *player_id, delta_u32 *revision);
+/* a player's machine's profile claim, while the machine has that one player
+alone: its player ID (DELTA_WIRE_PLAYER_ID_SIZE bytes) */
+int delta_peer_player_profile(int player_index, unsigned char *player_id);
+/* Bomb game types (docs/bomb.md): the host's game's player traits, sent to
+the clients that agreed to bomb (NULL: none: the game is no Bomb game
+type); the client's: the host's traits, and the number raised each time
+they changed (0: none heard, or not a client); whether a machine of the
+hosted game lacks a capability (delta_peer_machine_lacks: every other
+machine does while this host has no Delta), and whether it is still in its
+handshake's window */
+void delta_peer_game_set_traits(const struct delta_wire_traits *traits);
+delta_u32 delta_peer_game_host_traits(struct delta_wire_traits *traits);
+int delta_peer_game_machine_lacks(int machine_index, int capability);
+/* whether a player's machine agreed to a capability with the host, as this
+machine knows it (its own, the host's, the roster's); none for a player
+without one */
+int delta_peer_game_player_has(int player_index, int capability);
+int delta_peer_game_machine_pending(int machine_index);
+/* ... and the network version its HELLO said (delta_peer_machine_legacy_version;
+0 while this host has no Delta, or the machine no session) */
+int delta_peer_game_machine_legacy_version(int machine_index);
 /* the game's room: delta_peer_room_has and _room_limit of the session */
 int delta_peer_game_room_has(int capability);
 int delta_peer_game_room_limit(int limit);

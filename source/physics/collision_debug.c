@@ -72,6 +72,8 @@ symbols in this file:
 #include "scenario/scenario.h"
 #include "tag_files/tag_groups.h"
 
+#ifndef HALO_CONSOLE_NO_DEBUG_TOOLS
+
 /* ---------- constants */
 
 enum
@@ -585,3 +587,27 @@ void collision_debug_render(
 }
 
 /* ---------- private code */
+
+#else
+
+/* port: the console's build without the developer tools (halo_xbox_prefix.h)
+has none of this module; what the rest of the game calls answers with nothing */
+
+/* (the flags and sizes the scripts set, which the debug display alone reads) */
+boolean collision_debug_flag_front_facing_surfaces = TRUE;
+boolean collision_debug_flag_ignore_invisible_surfaces = TRUE;
+boolean collision_debug_flag_structure = TRUE;
+boolean collision_debug_flag_media = TRUE;
+boolean collision_debug_flag_objects = TRUE;
+real collision_debug_length = 100.0f;
+real collision_debug_width = 0.0f;
+real collision_debug_height = 0.0f;
+boolean collision_debug_phantom_bsp = FALSE;
+
+void collision_debug_render(
+	void)
+{
+	return;
+}
+
+#endif

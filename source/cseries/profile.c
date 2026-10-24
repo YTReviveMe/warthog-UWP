@@ -281,13 +281,22 @@ symbols in this file:
 #include <xtl.h>
 #endif
 
+#ifndef HALO_CONSOLE_NO_DEBUG_TOOLS
+
 /* ---------- constants */
 
 enum
 {
 	MAXIMUM_PROFILE_SECTIONS = 256,
 	MAXIMUM_GAME_TICKS_PER_FRAME = 150,
+#ifndef HALO_XBOX_CONSOLE
 	MAXIMUM_PROFILE_FRAMES = 256,
+#else
+	/* port: the frames' history, which only the profiler's display reads,
+	kept short on the console: 256 were a megabyte of a 64 MB Xbox's
+	image */
+	MAXIMUM_PROFILE_FRAMES = 16,
+#endif
 	MAXIMUM_PROFILE_WINDOWS = 4,
 };
 
@@ -1840,3 +1849,207 @@ next_section:
 
 	return;
 }
+
+#else
+
+/* port: the console's build has no profiler (halo_xbox_prefix.h): the
+sections' macros are empty (profile.h), the flags the scripts and the
+screens read stay, and the calls the game makes answer with nothing */
+
+void profile_rasterizer_stats(
+	real gpu_time,
+	__int64 pushbuffer_size)
+{
+	return;
+}
+
+boolean profile_timebase_ticks = FALSE;
+boolean profile_global_enable = FALSE;
+boolean profile_dump_frames = FALSE;
+boolean profile_dump_lost_frames = FALSE;
+/* (profile_display and profile_graph are port/linux/src/halo_linker_common.c's) */
+
+void profile_initialize(
+	void)
+{
+	return;
+}
+
+void profile_tick_start(
+	void)
+{
+	return;
+}
+
+void profile_tick_end(
+	void)
+{
+	return;
+}
+
+void profile_render_window_start(
+	boolean player_window)
+{
+	return;
+}
+
+void profile_render_window_end(
+	void)
+{
+	return;
+}
+
+void profile_render_start(
+	void)
+{
+	return;
+}
+
+void profile_render_end(
+	void)
+{
+	return;
+}
+
+void profile_frame_start(
+	void)
+{
+	return;
+}
+
+void profile_frame_end(
+	void)
+{
+	return;
+}
+
+void profile_idle_start(
+	void)
+{
+	return;
+}
+
+void profile_idle_end(
+	void)
+{
+	return;
+}
+
+void profile_lapsed_frames(
+	short frames,
+	boolean lapsed,
+	char const *reason)
+{
+	return;
+}
+
+void profile_lapsed_msec(
+	long msec)
+{
+	return;
+}
+
+void profile_seconds_elapsed(
+	real seconds)
+{
+	return;
+}
+
+void profile_texture_start(
+	void)
+{
+	return;
+}
+
+void profile_texture_end(
+	void)
+{
+	return;
+}
+
+void profile_sections_activate(
+	char const *section_name)
+{
+	console_debug_tools_unavailable("profile_sections_activate");
+
+	return;
+}
+
+void profile_sections_deactivate(
+	char const *section_name)
+{
+	console_debug_tools_unavailable("profile_sections_deactivate");
+
+	return;
+}
+
+void profile_dump(
+	const char *name,
+	short sort_mode,
+	short format_mode,
+	short maximum_section_count,
+	char *buffer)
+{
+	console_debug_tools_unavailable("profile_dump");
+
+	return;
+}
+
+void profile_dump_to_file(
+	const char *name)
+{
+	console_debug_tools_unavailable("profile_dump_to_file");
+
+	return;
+}
+
+void profile_frame_iterator_new(
+	struct profile_frame_iterator *iterator)
+{
+	return;
+}
+
+boolean profile_frame_iterator_next(
+	struct profile_frame_iterator *iterator,
+	struct profile_frame_info *info)
+{
+	return FALSE;
+}
+
+void profile_frame_get_messages(
+	struct profile_frame_iterator *iterator,
+	short *message_count,
+	short maximum_message_count,
+	char **messages,
+	union point2d *locations,
+	union real_argb_color const **colors)
+{
+	*message_count = 0;
+
+	return;
+}
+
+long profile_frame_get_stalls(
+	struct profile_frame_iterator *iterator,
+	short *stall_index,
+	real *stall_msec)
+{
+	return 0;
+}
+
+short profile_find_frame_value(
+	const char *name,
+	short *section_index_reference)
+{
+	return NONE;
+}
+
+real profile_frame_get_value(
+	struct profile_frame_iterator *iterator,
+	short frame_value,
+	short section_index)
+{
+	return 0.0f;
+}
+
+#endif

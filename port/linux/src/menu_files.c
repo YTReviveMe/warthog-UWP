@@ -405,12 +405,17 @@ static int for_this_platform(struct reader *reader, const XML_Char **attributes)
 
 			if (strcmp(platform, "desktop") && strcmp(platform, "android") &&
 				strcmp(platform, "uwp") && strcmp(platform, "desktop_uwp") &&
-				strcmp(platform, "android_only") && strcmp(platform, "non_uwp"))
+				strcmp(platform, "android_only") && strcmp(platform, "non_uwp") &&
+				strcmp(platform, "switch"))
 			{
 				reader_error(reader, "unknown platform=\"%s\"", platform);
 				return 1;
 			}
-#ifdef HALO_XBOX_UWP
+			/* (the Switch's game is built as Android's, with
+			HALO_SWITCH_CONSOLE too: "android" is the Android app's) */
+#if defined(HALO_SWITCH_CONSOLE)
+			return !strcmp(platform, "switch");
+#elif defined(HALO_XBOX_UWP)
 			return !strcmp(platform, "uwp") || !strcmp(platform, "desktop_uwp") ||
 				!strcmp(platform, "android");
 #elif defined(HALO_ANDROID)
@@ -1021,6 +1026,10 @@ static struct
 	int failed;
 } art[MAXIMUM_ART];
 static long art_count;
+#ifdef HALO_CONSOLE_HOST_ART
+/* changed whenever the art registered changes (menu_art_serial) */
+static unsigned long art_serial = 1;
+#endif
 
 void halo_menus_art_register(void const *texture, char const *png)
 {
@@ -1054,6 +1063,9 @@ void halo_menus_art_register(void const *texture, char const *png)
 	memset(&art[index], 0, sizeof(art[index]));
 	art[index].data = data;
 	art[index].png = strdup(png);
+#ifdef HALO_CONSOLE_HOST_ART
+	art_serial++;
+#endif
 }
 
 void halo_menus_art_forget(void)
@@ -1067,6 +1079,9 @@ void halo_menus_art_forget(void)
 			glDeleteTextures(1, &art[index].texture);
 	}
 	art_count = 0;
+#ifdef HALO_CONSOLE_HOST_ART
+	art_serial++;
+#endif
 }
 
 unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
@@ -1097,3 +1112,28 @@ unsigned int menu_art_texture(unsigned long data, unsigned long *levels)
 	*levels = art[index].levels;
 	return art[index].texture;
 }
+
+#ifdef HALO_CONSOLE_HOST_ART
+unsigned long menu_art_serial(void)
+{
+	return art_serial;
+}
+
+const char *menu_art_name(unsigned long data)
+{
+	long index;
+
+	for (index = 0; index < art_count; index++)
+	{
+		if (art[index].data == data)
+			return art[index].png;
+	}
+	return NULL;
+}
+
+const unsigned char *menu_art_png(const char *name, unsigned long *size)
+{
+	*size = 0;
+	return file_data(name, size);
+}
+#endif

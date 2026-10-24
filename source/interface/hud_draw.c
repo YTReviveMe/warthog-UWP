@@ -110,6 +110,10 @@ symbols in this file:
 enum
 {
 	_hud_dont_scale_offset_bit = 0,
+	/* port: Halo PC's "use high resolution scale" (port/linux/game/ce_hud.c),
+	which only a Custom Edition map's numbers keep: their digits are drawn
+	at half size, as Halo PC draws them (no Xbox map sets it) */
+	_hud_port_high_resolution_scale_bit = 2,
 };
 
 /* hud number and meter definitions (no shared header declares these yet;
@@ -1124,8 +1128,10 @@ pixel32 get_flash_color(
 
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
 
+	/* port: the phase of the frame, not the tick
+	(port/linux/game/render_interpolation.c) */
 	flash_phase = (real)fmod(
-		(game_time_get() - reference_value) * (1.0f / TICKS_PER_SECOND),
+		render_interpolation_ticks_since(game_time_get(), reference_value) * (1.0f / TICKS_PER_SECOND),
 		hud_color->flash_period);
 	pixel32_to_real_argb_color(hud_color->color, &base_color);
 	pixel32_to_real_argb_color(hud_color->flash_color, &flash_color);
@@ -2010,6 +2016,8 @@ void hud_draw_numbers(
 				scale = hud_globals_get_scale(
 					TEST_FLAG(draw_flags, _hud_draw_in_multiplayer_bit));
 			}
+			if (TEST_FLAG(numbers->placement.multiplayer_scaling_flags, _hud_port_high_resolution_scale_bit))
+				scale *= 0.5f;
 #ifdef HALO_CUSTOM_EDITION
 			/* port: the digits' bitmap drawn at its HUD scale, their spacing
 			(the HUD number's widths, in pixels of the screen) at the HUD's */

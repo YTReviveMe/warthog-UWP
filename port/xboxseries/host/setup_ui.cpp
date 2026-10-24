@@ -145,15 +145,9 @@ fire_and_forget browse(const std::shared_ptr<launcher_state> &state, browse_acti
             state->internal_browse = false;
             const auto drives = KnownFolders::RemovableDevices();
             const auto roots = co_await drives.GetFoldersAsync();
-            for (const auto &root : roots) {
-                if (_wcsicmp(root.Path().c_str(), L"E:\\") == 0) {
-                    folder = root;
-                    break;
-                }
-            }
-            if (!folder && roots.Size() == 1)
+            if (roots.Size() == 1)
                 folder = roots.GetAt(0);
-            if (!folder && roots.Size() > 1)
+            else if (roots.Size() > 1)
                 folder = drives;
             if (!folder) {
                 state->error_message = "No USB storage was found. Connect a media-formatted drive and try again.";

@@ -114,7 +114,7 @@ symbols in this file:
 #include "follow_camera.h" /* port: port/linux/game/follow_camera.c */
 #include "powerup_timers.h" /* port: port/linux/game/powerup_timers.c */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
-#ifdef HALO_GAME_BROWSER
+#ifdef HALO_PORT_CHAT
 #include "chat.h" /* port: port/linux/game/chat.c */
 #endif
 #include "text/font_group.h"
@@ -783,6 +783,11 @@ void hud_picked_up_weapon(
 	short local_player_index,
 	long weapon_definition_index)
 {
+#ifdef HALO_GAME_BROWSER
+	/* port: Bomb's bomb is the map's oddball ball: no "odd ball" line */
+	if (game_engine_bomb_hides_pickup(weapon_definition_index))
+		return;
+#endif
 	if (local_player_index != NONE)
 	{
 		hud_add_item_message(
@@ -1017,6 +1022,7 @@ static void hud_draw_players(
 	return;
 }
 
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 /* port: in multiplayer and network co-op, players' names above their heads
 (display.player_names: "all", "allies", "enemies" or "none"). An ally's goes
 above the triangle the game draws over teammates; an enemy's only within the
@@ -1246,6 +1252,8 @@ static void hud_draw_player_names(
 	return;
 }
 
+#endif /* HALO_CONSOLE_NO_PLAYER_NAMES */
+
 static void temporary_hud_draw(
 	void)
 {
@@ -1402,8 +1410,10 @@ void hud_draw_screen(
 		}
 
 		/* port: players' names above their heads, in multiplayer and network co-op */
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 		if ((game_engine_running() || network_coop_active()) && !cinematic_in_progress())
 			hud_draw_player_names();
+#endif
 		/* port: who a dead network co-op player is watching */
 		if (player->unit_index == NONE && coop_spectating() && !cinematic_in_progress())
 			coop_spectate_draw(render.local_player_index);
@@ -1417,7 +1427,7 @@ void hud_draw_screen(
 		/* port: the network co-op vote to skip a cinematic */
 		if (cinematic_in_progress())
 			coop_skip_vote_draw(render.local_player_index);
-#ifdef HALO_GAME_BROWSER
+#ifdef HALO_PORT_CHAT
 		/* port: text chat's lines (port/linux/game/chat.c) */
 		if (!cinematic_in_progress())
 			chat_draw(render.local_player_index);

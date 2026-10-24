@@ -396,6 +396,20 @@ symbols in this file:
 #include "interface/player_ui.h"
 #include "interface/marketing_and_strategic_business_development.h"
 #endif
+#include "halo_perf_log.h" /* port: console.perf_log */
+
+/* port: the main loop's stage, for the console's bring-up watchdog
+(port/xbox/src/xbox_port.c); nothing elsewhere */
+#ifdef HALO_XBOX_CONSOLE
+extern char const *volatile xbox_main_stage;
+#define MAIN_STAGE(name) (xbox_main_stage = (name))
+#elif defined(HALO_CONSOLE_BRINGUP_LOG)
+/* (the console's profile log: cseries/frame_profile.h) */
+#include "cseries/frame_profile.h"
+#define MAIN_STAGE(name) FRAME_STAGE(name)
+#else
+#define MAIN_STAGE(name) ((void)0)
+#endif
 
 /* port: the main loop's stage, for the console's bring-up watchdog
 (port/xbox/src/xbox_port.c); nothing elsewhere */
@@ -678,10 +692,11 @@ typedef char screenshot_and_framerate_globals_size_assert[
 
 #ifndef HALO_XBOX_CONSOLE
 void network_test_update(boolean main_menu_loaded, real seconds);
-#ifdef HALO_GAME_BROWSER
-void chat_update(void);
-#endif
+void audio_probe_update(unsigned char main_menu_loaded, float seconds);
 void team_change_update(void);
+#endif
+#ifdef HALO_PORT_CHAT
+void chat_update(void);
 #endif
 
 /* ---------- prototypes */
@@ -1175,7 +1190,8 @@ static real first_person_field_of_view_scale(
 		real degrees = (real)config_real("display.field_of_view");
 
 		read_at = config_changes();
-		if (!valid_real(degrees) || degrees == 70.0f)
+		/* (a build without the setting, a console's, reads 0: the original 70) */
+		if (!valid_real(degrees) || degrees <= 0.0f || degrees == 70.0f)
 			scale = 1.0f;
 		else
 		{
@@ -1185,6 +1201,35 @@ static real first_person_field_of_view_scale(
 	}
 
 	return scale;
+}
+
+/* port: display.viewmodel_field_of_view, the first-person weapon's and
+arms' own view width in degrees across a 4:3 picture (0, the default: the
+view's, display.field_of_view; else 50 to 120), as what the first-person
+weapon's projection is scaled by: the weapon is drawn as at that width
+whatever the view's, so a wide view does not stretch it. Zoom still applies
+to it as before. Only what is drawn changes. */
+real first_person_weapon_projection_scale(
+	void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+	static real weapon_scale = 0.0f;
+
+	if (read_at != config_changes())
+	{
+		real degrees = (real)config_real("display.viewmodel_field_of_view");
+
+		read_at = config_changes();
+		if (!valid_real(degrees) || degrees <= 0.0f)
+			weapon_scale = 0.0f;
+		else
+		{
+			degrees = PIN(degrees, 50.0f, 120.0f);
+			weapon_scale = tangent(DEGREES_TO_RADIANS(degrees) * 0.5f) / tangent(DEGREES_TO_RADIANS(70.0f) * 0.5f);
+		}
+	}
+
+	return weapon_scale > 0.0f ? first_person_field_of_view_scale() / weapon_scale : 1.0f;
 }
 
 /* port: display.far_clip_distance, how far the world is drawn (1024 as on
@@ -1270,6 +1315,15 @@ void set_window_camera_values(
 	window->rasterizer_camera.mirrored = FALSE;
 	window->rasterizer_camera.z_near = rasterizer_globals.near_clip_distance;
 	window->rasterizer_camera.z_far = MAX(rasterizer_globals.far_clip_distance, far_clip_distance_floor());
+	/* port: clip distances that are not numbers (the globals not read yet)
+	are the Xbox game's */
+	if (!(window->rasterizer_camera.z_near >= 0.0f) ||
+		!(window->rasterizer_camera.z_far > window->rasterizer_camera.z_near) ||
+		window->rasterizer_camera.z_far - window->rasterizer_camera.z_far != 0.0f)
+	{
+		window->rasterizer_camera.z_near = 0.0625f;
+		window->rasterizer_camera.z_far = 1024.0f;
+	}
 	if (!debug_render_freeze)
 		window->render_camera = window->rasterizer_camera;
 
@@ -2371,6 +2425,16 @@ static void main_won_map_private(
 void main_set_map_name(
 	char const *map_name)
 {
+#ifdef HALO_MAP_LIST
+	/* port: with a map pack's own menus (game.pack_menus), a level only the
+	pack has is the pack's: its menus name cex_museum, which is
+	cex_museum@cex here (port/linux/game/map_packs.c) */
+	void map_pack_menus_map_name(char const *map_name, char *name, long size);
+	char pack_map_name[NUMBEROF(main_globals.soloplayer_map_name)];
+
+	map_pack_menus_map_name(map_name, pack_map_name, sizeof(pack_map_name));
+	map_name = pack_map_name;
+#endif
 	main_globals.want_to_be_at_main_menu = FALSE;
 	csstrncpy(main_globals.soloplayer_map_name, map_name, NUMBEROF(main_globals.soloplayer_map_name) - 1);
 	main_globals.soloplayer_map_name[NUMBEROF(main_globals.soloplayer_map_name) - 1] = 0;
@@ -3157,6 +3221,18 @@ void halt_and_catch_fire(
 	struct rasterizer_frame_begin_parameters frame_parameters;
 	struct rasterizer_window_begin_parameters window_parameters;
 
+#ifdef HALO_CONSOLE_HALT_TO_LAUNCHER
+	{
+		/* port: no screen to show the error on yet; the log has it
+		(errors.c), and the console goes back to its launcher instead of
+		stopping (the port's console_exit_to_launcher) */
+		void console_log_backtrace(const char *why);
+		void console_exit_to_launcher(void);
+
+		console_log_backtrace("halted");
+		console_exit_to_launcher();
+	}
+#endif
 	if (!global_screenshot_count.halt_recursion_lock)
 	{
 		scenario = global_scenario_try_and_get();
@@ -3302,7 +3378,11 @@ static void main_game_render(
 	MAIN_STAGE("render: collision_log_continue_period");
 	collision_log_continue_period(TRUE);
 	MAIN_STAGE("render: sound_render");
+	HALO_PERF_BEGIN(_halo_perf_sound);
+	HALO_PERF_BEGIN(_halo_perf_render_sound);
 	sound_render();
+	HALO_PERF_END(_halo_perf_render_sound);
+	HALO_PERF_END(_halo_perf_sound);
 	force_single_screen = game_engine_force_single_screen();
 	last_local_player_index = NONE;
 
@@ -3431,6 +3511,16 @@ void main_loop(
 
 	while (TRUE)
 	{
+#ifdef HALO_CONSOLE_BRINGUP_LOG
+		/* port: the loop's pulse in the port's log (the console developer
+		tools) */
+		{
+			extern void console_main_loop_tick(void);
+
+			MAIN_STAGE("console_main_loop_tick (the port's log)");
+			console_main_loop_tick();
+		}
+#endif
 #ifdef HALO_XBOX_CONSOLE
 		/* port: the loop counted for the bring-up watchdog (port/xbox/src/xbox_port.c);
 		the game list fetched once at the start, on a thread of its own, and
@@ -3452,8 +3542,11 @@ void main_loop(
 				/* (a memory class message, once the main menu is up:
 				port/xbox/src/xbox_memory.c) */
 				extern void xbox_memory_update(void);
+				/* (and the stack's deepest: port/xbox/src/xbox_stack.c) */
+				extern void xbox_stack_update(void);
 
 				xbox_memory_update();
+				xbox_stack_update();
 			}
 			{
 				/* (other threads' lines into debug.txt: internet play's) */
@@ -3462,6 +3555,10 @@ void main_loop(
 				xbox_log_flush();
 			}
 		}
+#endif
+#ifdef HALO_CONSOLE_LOG_BUFFER
+		/* port: debug.txt's waiting lines, once a second (errors.c) */
+		error_log_update();
 #endif
 		if (!game_in_editor())
 		{
@@ -3590,13 +3687,20 @@ void main_loop(
 			/* automated system link tests (port/linux/game/network_test.c) */
 			MAIN_STAGE("network_test_update");
 			network_test_update(main_globals.main_menu_scenario_loaded, main_globals.seconds_elapsed);
-#ifdef HALO_GAME_BROWSER
-			/* text chat (port/linux/game/chat.c) */
-			chat_update();
-#endif
 			/* changing teams during a game (port/linux/game/team_change.c) */
 			team_change_update();
 #endif
+#ifdef HALO_PORT_CHAT
+			/* text chat (port/linux/game/chat.c; on a console, its client's
+			part) */
+			MAIN_STAGE("chat_update");
+			chat_update();
+#endif
+			/* the audio probe's scripted recording (port/linux/game/audio_probe.c),
+			on the consoles too */
+			MAIN_STAGE("audio_probe_update");
+			audio_probe_update(main_globals.main_menu_scenario_loaded, main_globals.seconds_elapsed);
+			HALO_PERF_BEGIN(_halo_perf_network);
 			connection = main_globals.connection;
 			if (connection==_game_connection_network_client)
 			{
@@ -3629,6 +3733,7 @@ void main_loop(
 			{
 				break;
 			}
+			HALO_PERF_END(_halo_perf_network);
 
 			MAIN_STAGE("main_update_time");
 			main_update_time();
@@ -3690,6 +3795,7 @@ void main_loop(
 					MAIN_STAGE("player_control_update");
 					player_control_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
 
+					HALO_PERF_BEGIN(_halo_perf_network);
 					connection = main_globals.connection;
 					if (connection>_game_connection_local && connection<=_game_connection_network_server && !network_game_client_end_frame())
 					{
@@ -3697,6 +3803,7 @@ void main_loop(
 						MAIN_STAGE("network_game_abort");
 						network_game_abort();
 					}
+					HALO_PERF_END(_halo_perf_network);
 
 					MAIN_STAGE("game_time_update");
 					game_time_update((real)main_globals.halt_time_scale*main_globals.seconds_elapsed);
@@ -3742,7 +3849,9 @@ void main_loop(
 					render_interpolation_frame_end();
 					MAIN_STAGE("profile_render_end");
 #else
+					HALO_PERF_BEGIN(_halo_perf_render);
 					main_game_render((double)main_globals.seconds_elapsed);
+					HALO_PERF_END(_halo_perf_render);
 #endif
 					profile_render_end();
 				}
@@ -3752,18 +3861,24 @@ void main_loop(
 				MAIN_STAGE("profile_render_start");
 				profile_render_start();
 				MAIN_STAGE("main_pregame_render");
+				HALO_PERF_BEGIN(_halo_perf_render);
 				main_pregame_render();
+				HALO_PERF_END(_halo_perf_render);
 				MAIN_STAGE("profile_render_end");
 				profile_render_end();
 			}
 
 			MAIN_STAGE("main_rasterizer_throttle");
+			HALO_PERF_BEGIN(_halo_perf_vsync_wait);
 			main_rasterizer_throttle();
+			HALO_PERF_END(_halo_perf_vsync_wait);
 
 			if (render_frame && !debug_no_drawing)
 			{
 				MAIN_STAGE("main_present_frame");
+				HALO_PERF_BEGIN(_halo_perf_present);
 				main_present_frame();
+				HALO_PERF_END(_halo_perf_present);
 			}
 		}
 
@@ -3771,6 +3886,7 @@ void main_loop(
 		input_frame_end();
 		MAIN_STAGE("profile_frame_end");
 		profile_frame_end();
+		HALO_PERF_FRAME();
 		MAIN_STAGE("main_frame_rate_debug");
 		main_frame_rate_debug();
 

@@ -43,13 +43,13 @@ One declaration (`network_game_manager.h:45-68`), checked against
 **slot-indexed**: `machines[i]` is the machine in connection slot `i`
 (`machine_index` `i`, else NONE), `players[i]` the player in slot `i`.
 
-| | console (16/16) | PCs (128/128) |
+| | console (17 machines, 16 players) | PCs (128/128) |
 |---|---|---|
-| `player_count` | 0x554 | 0x2314 |
-| `players` | 0x556 | 0x2316 |
-| `random_seed` | 0x758 | 0x3318 |
-| PC options | 0x760 | 0x3320 |
-| size | 0x780 (1,920) | 0x3340 (13,120) |
+| `player_count` | 0x598 | 0x2314 |
+| `players` | 0x59A | 0x2316 |
+| `random_seed` | 0x79C | 0x3318 |
+| PC options | 0x7A4 | 0x3320 |
+| size | 0x7C4 (1,988) | 0x3340 (13,120) |
 
 It goes in 0xE00-byte pieces (`message_server_game_settings_update`):
 four from a PC, one from the console. A client refuses any piece whose
@@ -223,10 +223,10 @@ and leaving cleanly what doesn't fold:
 - **Joining by invite (internet).** The console joins a game as the PCs
   do, by its invite (`halo://join/` and 64 hex digits): ONLINE GAMES' A on
   a listed game (the console list's first field is the invite), or Y for
-  the invite in `D:\join.txt`. The tunnel is the desktop builds' own
+  the invite in `console.join` (`D:\config.toml`). The tunnel is the desktop builds' own
   `port/linux/src/p2p.c`, `p2p_signal.c` and `p2p_crypto.c` (with KCP and
-  Monocypher), compiled for the console as they are (`tools/xbox_build.py`
-  copies them into the build so their includes find `port/xbox/p2p`'s
+  Monocypher), compiled for the console as they are (the Xbox's build,
+  warthog-xbox's `port/xbox/build.py`, copies them into the build so their includes find `port/xbox/p2p`'s
   headers): MQTT to the public brokers over XNet's TCP, STUN and hole
   punching on one UDP socket, X25519 and ChaCha20-Poly1305. Its platform
   layer is `port/xbox/src/xbox_p2p.c` (sockets over XNet's Winsock,
@@ -240,19 +240,18 @@ and leaving cleanly what doesn't fold:
   their own), no Discord, no public listing (`p2p_lobby.c`), no invite
   hand-off; `P2P_JOINER_ONLY` gives p2p.c room for one host's stand-ins
   and streams (about 160 KB, not a 128-machine host's 2.7 MB). Internet
-  play is on only with `D:\bypass_security.txt`. The tunnel's thread logs
+  play is on only with `console.bypass_security`. The tunnel's thread logs
   to the debug monitor at once and to `debug.txt` through the main loop
   (`xbox_log_flush`): "Internet play: ..." lines, addresses only as
   tags.
 - **Joining on a LAN.** System Link finds a PC host on the console's LAN by its
   broadcast advertisement, as it finds a console's. A host the broadcasts
-  don't reach is joined by address: `D:\join.txt`, one line, an IPv4
-  address; the console tries it once each time System Link opens
+  don't reach is joined by address: `console.join`, an IPv4 address; the console tries it once each time System Link opens
   (`port/xbox/src/xbox_direct_join.c`), with the address never logged.
 
 Tested on the host: `port/xbox/tests/run.sh` (the record's fold, round trip
 and refusals; the game type states' fold, Slayer's sizes, the entries
-dropped; `D:\join.txt`'s parse, every refusal, every cut short). And two
+dropped; `console.join`'s parse, every refusal, every cut short). And two
 copies on one Mac, on loopback addresses of their own: ChupathingyCE main's
 macOS build as a dedicated server and as a network-test host (`HALO_NETWORK_TEST=
 host:bloodgulch:slayer,slayer` with kills, shots and a vehicle), a
@@ -290,6 +289,6 @@ the tunnel's thread. To be measured on the console.
    above, if the console's measurements (`debug.txt`, "cross-play: ...
    host's objects") show a PC host's indices reaching its own half.
 3. Two machines on one LAN: a PC build's dedicated server, the devkit
-   joining over system link (`bypass_security.txt` on); then the reverse.
+   joining over system link (`console.bypass_security` on); then the reverse.
 4. Internet joins through the PCs' p2p tunnel under
    `transport_endpoint_winsock.c` (the README's "Online Games on the Xbox").

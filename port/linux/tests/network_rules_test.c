@@ -1,11 +1,12 @@
 /*
 NETWORK_RULES_TEST.C
 
-Tests of the rules of network versions 30 to 32 (port/linux/game/
+Tests of the rules of network versions 30 to 36 (port/linux/game/
 network_rules.c): the bytes of the aim assist policy message and of a
 player's input entry, the window of a datagram's stamp, what a client does
-with the host's word on its player on an elevator, who rides one, and the
-policy's reach. The expected values are those of the network's documented
+with the host's word on its player on an elevator, who rides one, the
+policy's reach, and 33 to 36's settings record sizes, further gametype
+options, shield effects message and static target reach. The expected values are those of the network's documented
 behavior. tools/test_network_rules.py builds and runs them.
 */
 
@@ -279,6 +280,210 @@ static void test_aim_device(void)
 	CHECK(network_rules_mouse_is_aim_device(600, 500, 550));
 }
 
+static void test_settings_size(void)
+{
+	static uint8_t record[NETWORK_RULES_SETTINGS_EXTENDED_SIZE];
+	uint8_t extended[NETWORK_RULES_EXTENDED_OPTIONS_SIZE];
+	int index;
+
+	/* 13,120 bytes (0x3340) from 11 to 34, 13,136 (0x3350) from 35 */
+	CHECK(NETWORK_RULES_SETTINGS_SIZE == 0x3340 && NETWORK_RULES_SETTINGS_EXTENDED_SIZE == 0x3350);
+	CHECK(network_rules_settings_size(11) == 0x3340);
+	CHECK(network_rules_settings_size(32) == 0x3340);
+	CHECK(network_rules_settings_size(34) == 0x3340);
+	CHECK(network_rules_settings_size(35) == 0x3350);
+	CHECK(network_rules_settings_size(36) == 0x3350);
+	CHECK(network_rules_settings_size(NETWORK_RULES_VERSION_UNKNOWN) == 0);
+	/* a known version's own size alone; one not known, either */
+	CHECK(network_rules_settings_size_taken(34, 0x3340) && !network_rules_settings_size_taken(34, 0x3350));
+	CHECK(network_rules_settings_size_taken(36, 0x3350) && !network_rules_settings_size_taken(36, 0x3340));
+	CHECK(network_rules_settings_size_taken(NETWORK_RULES_VERSION_UNKNOWN, 0x3340));
+	CHECK(network_rules_settings_size_taken(NETWORK_RULES_VERSION_UNKNOWN, 0x3350));
+	CHECK(!network_rules_settings_size_taken(NETWORK_RULES_VERSION_UNKNOWN, 0x3348));
+	/* the pieces' total size words of the test vectors: 50 33 and 40 33 */
+	CHECK((network_rules_settings_size(35) & 0xFF) == 0x50 && (network_rules_settings_size(35) >> 8) == 0x33);
+	CHECK((network_rules_settings_size(34) & 0xFF) == 0x40 && (network_rules_settings_size(34) >> 8) == 0x33);
+
+	/* a 35 record: options at 0x3320 (0x2C bytes), local data at 0x334C;
+	folded, the first 0x1C options stay, the local data is at 0x333C */
+	for (index = 0; index < (int)sizeof(record); index++)
+		record[index] = (uint8_t)(index * 7);
+	network_rules_settings_fold_options(record, extended);
+	for (index = 0; index < 0x333C; index++)
+		CHECK(record[index] == (uint8_t)(index * 7));
+	for (index = 0; index < 16; index++)
+		CHECK(extended[index] == (uint8_t)((0x333C + index) * 7));
+	for (index = 0; index < 4; index++)
+		CHECK(record[0x333C + index] == (uint8_t)((0x334C + index) * 7));
+	for (index = 0x3340; index < 0x3350; index++)
+		CHECK(record[index] == 0);
+}
+
+static void test_extended_options(void)
+{
+	static const uint8_t defaults[16] = { 0x00, 0x00, 0x01, 0x96, 0xC8, 0x05, 0x0A, 0x01, 0x00, 0x01 };
+	uint8_t options[16];
+	int hardcore;
+
+	network_rules_extended_options_default(options);
+	CHECK(memcmp(options, defaults, 16) == 0);
+	/* the built-ins' bytes pass unchanged */
+	options[0] = NETWORK_RULES_MODE_INFECTION;
+	network_rules_extended_options_sanitize(options);
+	CHECK(options[0] == 2 && memcmp(options + 1, defaults + 1, 15) == 0);
+
+	/* the sanitize vectors */
+	memcpy(options, defaults, 16);
+	options[0] = 4; options[1] = 7; options[2] = 0; options[3] = 99; options[4] = 251; options[5] = 0;
+	options[6] = 0; options[7] = 9; options[8] = 3; options[9] = 0; options[10] = 1; options[15] = 0xFF;
+	network_rules_extended_options_sanitize(options);
+	CHECK(options[0] == 0 && options[1] == 1 && options[2] == 1 && options[3] == 0x96 && options[4] == 0xC8 &&
+		options[5] == 5 && options[6] == 0 && options[7] == 1 && options[8] == 0 && options[9] == 0 &&
+		options[10] == 0 && options[15] == 0);
+	memcpy(options, defaults, 16);
+	options[2] = 17; options[3] = 201; options[5] = 31; options[6] = 31;
+	network_rules_extended_options_sanitize(options);
+	CHECK(options[2] == 1 && options[3] == 0x96 && options[5] == 5 && options[6] == 0x0A);
+	/* the range ends are kept */
+	options[2] = 16; options[3] = 200; options[4] = 100; options[5] = 30; options[6] = 30;
+	network_rules_extended_options_sanitize(options);
+	CHECK(options[2] == 16 && options[3] == 200 && options[4] == 100 && options[5] == 30 && options[6] == 30);
+
+	/* which game type a variant plays */
+	memcpy(options, defaults, 16);
+	CHECK(network_rules_extended_options_mode(options, 1, 1, &hardcore) == NETWORK_RULES_MODE_NONE && !hardcore);
+	options[0] = NETWORK_RULES_MODE_SWAT;
+	CHECK(network_rules_extended_options_mode(options, 1, 0, &hardcore) == NETWORK_RULES_MODE_SWAT);
+	CHECK(network_rules_extended_options_mode(options, 1, 1, &hardcore) == NETWORK_RULES_MODE_SWAT);
+	CHECK(network_rules_extended_options_mode(options, 0, 1, &hardcore) == NETWORK_RULES_MODE_NONE);
+	options[0] = NETWORK_RULES_MODE_INFECTION;
+	CHECK(network_rules_extended_options_mode(options, 1, 1, &hardcore) == NETWORK_RULES_MODE_INFECTION);
+	CHECK(network_rules_extended_options_mode(options, 1, 0, &hardcore) == NETWORK_RULES_MODE_NONE);
+	options[0] = NETWORK_RULES_MODE_GUN_GAME;
+	CHECK(network_rules_extended_options_mode(options, 1, 0, &hardcore) == NETWORK_RULES_MODE_GUN_GAME);
+	CHECK(network_rules_extended_options_mode(options, 1, 1, &hardcore) == NETWORK_RULES_MODE_NONE);
+	/* hardcore on any engine (a CTF variant: plain CTF, hardcore still) */
+	options[1] = 1;
+	CHECK(network_rules_extended_options_mode(options, 0, 1, &hardcore) == NETWORK_RULES_MODE_NONE && hardcore);
+}
+
+static void test_shield_effects_message(void)
+{
+	static const uint8_t vector[12] = { 0xC8, 0x00, 0x5B, 0x01, 0x04, 0x03, 0x02, 0x01, 0x05, 0x00, 0x00, 0x00 };
+	uint8_t message[NETWORK_RULES_SHIELD_EFFECTS_SIZE];
+	uint8_t bad[12];
+	int effects = -1;
+
+	CHECK(NETWORK_RULES_SHIELD_EFFECTS_SIZE == 12 && NETWORK_RULES_SHIELD_EFFECTS_KIND == 91);
+	network_rules_shield_effects_write(message, 5, 0x01020304);
+	CHECK(memcmp(message, vector, 12) == 0);
+	CHECK(network_rules_shield_effects_read(vector, 12, 0, &effects) && effects == 5);
+	/* the rejects: a size of 11 or 13, effects 6, reserved 1, two entries,
+	a datagram */
+	effects = -1;
+	CHECK(!network_rules_shield_effects_read(vector, 11, 0, &effects) && effects == -1);
+	CHECK(!network_rules_shield_effects_read(vector, 13, 0, &effects));
+	CHECK(!network_rules_shield_effects_read(vector, 12, 1, &effects));
+	memcpy(bad, vector, 12);
+	bad[8] = 6;
+	CHECK(!network_rules_shield_effects_read(bad, 12, 0, &effects));
+	memcpy(bad, vector, 12);
+	bad[10] = 1;
+	CHECK(!network_rules_shield_effects_read(bad, 12, 0, &effects));
+	memcpy(bad, vector, 12);
+	bad[3] = 2;
+	CHECK(!network_rules_shield_effects_read(bad, 12, 0, &effects));
+	memcpy(bad, vector, 12);
+	bad[2] = 90;
+	CHECK(!network_rules_shield_effects_read(bad, 12, 0, &effects));
+	/* effects past the last are written as stock */
+	network_rules_shield_effects_write(message, 9, 0);
+	CHECK(message[8] == 0 && message[9] == 0);
+}
+
+static void test_static_reach(void)
+{
+	float reach = network_rules_static_event_reach(1, 1.5f);
+
+	/* an area effect of cutoff 1.5 reaches 3.5; a tripmine of radius 0.3
+	at 0.5 is within its 3.8 */
+	CHECK(reach == 3.5f);
+	CHECK(network_rules_static_within(0.25f, 0.3f, reach));
+	CHECK(network_rules_static_within(3.8f * 3.8f, 0.3f, reach));
+	CHECK(!network_rules_static_within(3.9f * 3.9f, 0.3f, reach));
+	/* not an area effect: 2.0 alone */
+	CHECK(network_rules_static_event_reach(0, 1.5f) == 2.0f);
+}
+
+static void test_host_settings(void)
+{
+	static uint8_t record[NETWORK_RULES_SETTINGS_SIZE];
+	static uint8_t wire[NETWORK_RULES_SETTINGS_EXTENDED_SIZE];
+	static uint8_t folded[NETWORK_RULES_SETTINGS_EXTENDED_SIZE];
+	uint8_t further[NETWORK_RULES_EXTENDED_OPTIONS_SIZE];
+	uint8_t extended[NETWORK_RULES_EXTENDED_OPTIONS_SIZE];
+	int index, offset;
+
+	/* a host of 34 or older: the older record to everyone, at once */
+	CHECK(network_rules_host_settings_size(32, 0, 1) == 0x3340);
+	CHECK(network_rules_host_settings_size(34, 36, 0) == 0x3340);
+	/* of 36: an OpenCE machine (no HELLO, none to wait for) the newer */
+	CHECK(network_rules_host_settings_size(36, 0, 0) == 0x3350);
+	/* ... one whose HELLO may still come is waited for */
+	CHECK(network_rules_host_settings_size(36, 0, 1) == 0);
+	/* ... a Delta build of 32 (0.8.0e's HELLO) the older, one of 36 the newer */
+	CHECK(network_rules_host_settings_size(36, 32, 1) == 0x3340);
+	CHECK(network_rules_host_settings_size(36, 36, 1) == 0x3350);
+	CHECK(network_rules_host_settings_size(35, 36, 0) == 0x3350);
+	/* a Delta build newer than the host's number: the host's */
+	CHECK(network_rules_host_settings_size(36, 40, 0) == 0x3350);
+
+	/* who reports a static target's own damage: OpenCE's from 34 do not */
+	CHECK(network_rules_host_static_damage_reported(32, 0));
+	CHECK(!network_rules_host_static_damage_reported(34, 0));
+	CHECK(!network_rules_host_static_damage_reported(36, 0));
+	/* ... Delta builds before 35 do, as do this build's of a host under 35
+	(dealt once, by their report, or lost; never twice) */
+	CHECK(network_rules_host_static_damage_reported(36, 32));
+	CHECK(network_rules_host_static_damage_reported(32, 36));
+	CHECK(network_rules_host_static_damage_reported(34, 36));
+	CHECK(!network_rules_host_static_damage_reported(36, 36));
+
+	/* the record of 35's layout made from the older, piece by piece (the
+	pieces of 0xE00 of the test vectors: the last 0x950), folds back to it */
+	for (index = 0; index < (int)sizeof(record); index++)
+		record[index] = (uint8_t)(index * 13 + 5);
+	network_rules_extended_options_default(further);
+	for (offset = 0; offset < (int)sizeof(wire); offset += 0xE00)
+	{
+		int length = (int)sizeof(wire) - offset < 0xE00 ? (int)sizeof(wire) - offset : 0xE00;
+
+		if (offset == 0x2A00)
+			CHECK(length == 0x950);
+		network_rules_settings_extended_copy(record, further, offset, length, wire + offset);
+	}
+	/* the options' further bytes of a plain game, at 0x333C to 0x334B */
+	CHECK(wire[0x333C] == 0x00 && wire[0x333D] == 0x00 && wire[0x333E] == 0x01 && wire[0x333F] == 0x96 &&
+		wire[0x3340] == 0xC8 && wire[0x3341] == 0x05 && wire[0x3342] == 0x0A && wire[0x3343] == 0x01 &&
+		wire[0x3344] == 0x00 && wire[0x3345] == 0x01);
+	for (index = 0x3346; index < 0x334C; index++)
+		CHECK(wire[index] == 0);
+	/* the local data after them */
+	for (index = 0; index < 4; index++)
+		CHECK(wire[0x334C + index] == record[0x333C + index]);
+	for (index = 0; index < (int)sizeof(folded); index++)
+		folded[index] = wire[index];
+	network_rules_settings_fold_options(folded, extended);
+	for (index = 0; index < (int)sizeof(record); index++)
+		CHECK(folded[index] == record[index]);
+	for (index = 0; index < NETWORK_RULES_EXTENDED_OPTIONS_SIZE; index++)
+		CHECK(extended[index] == further[index]);
+	/* one piece across the further bytes' edges */
+	network_rules_settings_extended_copy(record, further, 0x3338, 0x18, folded);
+	CHECK(folded[0] == record[0x3338] && folded[3] == record[0x333B] && folded[4] == further[0] &&
+		folded[19] == further[15] && folded[20] == record[0x333C] && folded[23] == record[0x333F]);
+}
+
 int main(void)
 {
 	test_aim_assist_message();
@@ -288,6 +493,11 @@ int main(void)
 	test_riding();
 	test_aim_assist_policy();
 	test_aim_device();
+	test_settings_size();
+	test_extended_options();
+	test_shield_effects_message();
+	test_static_reach();
+	test_host_settings();
 	if (failures)
 	{
 		printf("network_rules_test: %d failure(s)\n", failures);

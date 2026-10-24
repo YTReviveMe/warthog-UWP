@@ -136,8 +136,8 @@ enum
 	GAME_STATE_CPU_SIZE = HALO_PORT_GAME_STATE_CPU_SIZE,
 	GAME_STATE_GPU_SIZE = HALO_PORT_GAME_STATE_GPU_SIZE,
 #else
-	GAME_STATE_CPU_SIZE = 0x305000,
-	GAME_STATE_GPU_SIZE = 0x40000,
+	GAME_STATE_CPU_SIZE = HALO_PORT_GAME_STATE_CPU_SIZE,
+	GAME_STATE_GPU_SIZE = HALO_PORT_GAME_STATE_GPU_SIZE,
 #endif
 	GAME_STATE_SIZE = GAME_STATE_CPU_SIZE+GAME_STATE_GPU_SIZE
 };
@@ -612,6 +612,22 @@ void *game_state_malloc(
 	return pointer;
 }
 
+#ifdef HALO_XBOX_CONSOLE
+/* port: the console's game state is the Xbox's size in every build
+(port/xbox/src/xbox_memory.c counts it so) */
+typedef char game_state_xbox_size_assert[GAME_STATE_SIZE == 0x345000 ? 1 : -1];
+
+/* port: the CPU part's use, for the console's memory log
+(port/xbox/src/xbox_memory.c) */
+void game_state_cpu_usage(
+	long *used,
+	long *size)
+{
+	*used = game_state_globals.cpu_allocation_size;
+	*size = GAME_STATE_CPU_SIZE;
+}
+#endif
+
 void *game_state_gpu_malloc(
 	const char *name,
 	const char *type,
@@ -737,7 +753,7 @@ static boolean game_state_image_data_valid(
 		return game_state_image_refuse(name, "is a data array of another signature");
 	if (data->maximum_count != maximum_count || data->size != element_size)
 		return game_state_image_refuse(name, "is a data array of another capacity");
-	if (data->data != XBOX_ADDRESS(live + 1))
+	if (data->data != DATA_ARRAY_OWN_ELEMENTS(live))
 		return game_state_image_refuse(name, "is a data array whose elements are elsewhere");
 	if (data->count < 0 || data->count > data->maximum_count ||
 		data->first_free_absolute_index < 0 || data->first_free_absolute_index > data->maximum_count ||
@@ -895,7 +911,9 @@ boolean game_state_image_accept(
 		if (!valid)
 			return FALSE;
 	}
-	csmemcpy(game_state_globals.base_address, image, size);
+	/* (the console reads straight into the game state: nothing to copy) */
+	if (image != game_state_globals.base_address)
+		csmemcpy(game_state_globals.base_address, image, size);
 	error(_error_silent, "the saved game is taken");
 
 	return TRUE;
@@ -928,7 +946,7 @@ made valid for the map, with an identifier to give out and counts that fit
 static boolean game_state_data_array_good(
 	struct data_array const *data)
 {
-	return data->signature == 'd@t@' && data->data == XBOX_ADDRESS(data + 1) && data->valid && data->next_identifier &&
+	return data->signature == 'd@t@' && data->data == DATA_ARRAY_OWN_ELEMENTS(data) && data->valid && data->next_identifier &&
 		data->count >= 0 && data->count <= data->maximum_count &&
 		data->actual_count >= 0 && data->actual_count <= data->count &&
 		data->first_free_absolute_index >= 0 && data->first_free_absolute_index <= data->maximum_count;
@@ -1094,7 +1112,7 @@ void game_state_initialize(
 	(halo_port_capacity.h, cache/physical_memory_map.c) */
 	game_state_globals.base_address = game_state_allocate_buffer(HALO_PORT_GAME_STATE_BASE_ADDRESS, GAME_STATE_CPU_SIZE, GAME_STATE_GPU_SIZE);
 #else
-	game_state_globals.base_address = game_state_allocate_buffer(0x80061000, GAME_STATE_CPU_SIZE, 0x40000);
+	game_state_globals.base_address = game_state_allocate_buffer(HALO_PORT_GAME_STATE_BASE_ADDRESS, GAME_STATE_CPU_SIZE, GAME_STATE_GPU_SIZE);
 #endif
 	game_state_create_or_open_file();
 	game_state_globals.header = game_state_malloc("header", NULL, sizeof(*game_state_globals.header));

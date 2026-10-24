@@ -1,86 +1,121 @@
-# Building Warthog for the original Xbox
+# Building
 
-This is how the original Xbox build works today. It is built on macOS with
-[OXDK](https://github.com/MrMilenko/OXDK), clang and lld-link. It should
-build on Linux the same way, but that is untested. There is no Windows
-build path yet; see "Help wanted: Windows tooling" in the README.
+The desktop, Android and server builds are in the README, "Building it
+yourself": `python3 configure.py`, then `ninja` and a target. This page
+covers what the README doesn't.
 
-Nothing from Microsoft's SDKs is in this repository, and none of it may be
-committed. You supply your own copies of the libraries and headers, and
-the build reads them from where you keep them.
+## Console ports
 
-## What to install
+Each console port lives in a repository of its own, with this repository
+(the game) pinned as a git submodule. The console repository holds only its
+port; the game holds the shared code, its console hooks, `port/console` and
+the build's generic side (`tools/console_build.py`).
 
-| What | Where it goes | Tested with |
-| --- | --- | --- |
-| Python 3 | on `PATH` | 3.9 (macOS's) |
-| [ninja](https://ninja-build.org/) | on `PATH` | 1.13 |
-| LLVM: clang and lld-link | macOS: `brew install llvm lld ninja`. The build looks in `LLVM_DIR`, then Homebrew's `llvm` folder, then `PATH` | Homebrew clang 22.1, LLD 22.1 |
-| [OXDK](https://github.com/MrMilenko/OXDK), with its `cxbe` built | `~/OXDK` (or `--oxdk DIR`, or `OXDK_DIR`) | |
-| The Xbox SDK's libraries and headers (the 5933 SDK) | OXDK's `xbox/xdk/lib` and `xbox/xdk/include`, set up as OXDK's README says | 5933 |
-| An Aug 2001 Direct3D library, `d3d8ntpr.lib` (the `aug01` i386 build) | anywhere; you give its path to `configure.py` | |
+| Repository | Console | Status | Maintained by |
+| --- | --- | --- | --- |
+| [ChupathingyCE/warthog-xbox](https://github.com/ChupathingyCE/warthog-xbox) | original Xbox | Test builds: plays online, up to 32 players, with Halo CE+ maps | Milenko |
+| [ChupathingyCE/warthog-360](https://github.com/ChupathingyCE/warthog-360) | Xbox 360 | Plays and joins servers on RGH hardware; test builds on Discord | Milenko |
+| [ChupathingyCE/warthog-switch](https://github.com/ChupathingyCE/warthog-switch) | Switch | Working: boots and plays on Switch hardware; CI builds it | [thelinkin3000](https://github.com/thelinkin3000) |
+| [ChupathingyCE/warthog-wiiu](https://github.com/ChupathingyCE/warthog-wiiu) | Wii U | Plays on hardware and joins servers online; [public test build](https://github.com/ChupathingyCE/warthog-wiiu/releases/tag/test-20261022) | Milenko |
 
-The SDK comes as a Windows installer that installs into Microsoft Visual
-Studio .NET. You install it (and a Visual Studio that it accepts) on a
-Windows computer or virtual machine, then copy its libraries and headers
-into OXDK. Why the build needs a separate Direct3D library from 2001 is in
-`port/xbox/README.md`, "Direct3D".
+A console repository looks like this:
 
-## Build
+```
+warthog-xbox/
+    chupathingyce/      the game, a submodule
+    port/xbox/          the port: its sources and build.py
+    tools/              the port's own tools (packaging, the build's stamp)
+    build.ninja         written by configure.py
+    build/xbox/         the build's output
+```
+
+From the console repository's root:
 
 ```sh
-python3 configure.py --xbox-d3d8 /path/to/d3d8ntpr.lib
+git submodule update --init
+python3 chupathingyce/configure.py --console-port port/xbox [options]
 ninja xbox
 ```
 
-The result is `build/xbox/default.xbe`. `configure.py` records its
-options, so later runs of `ninja` keep them. If it can't find OXDK or the
-Direct3D library, there is no `xbox` target. The Linux, Windows and macOS
-targets in `configure.py` are ChupathingyCE's and build as they do there.
+`configure.py` writes `build.ninja` in the folder it runs from, with paths
+from there: the game's sources from `chupathingyce/`, the port's from
+`port/xbox/`, and the output in `build/`. Run this way it generates the
+console's targets only. `ninja` reruns `configure.py` with the same options
+when the game's build files or the port's `build.py` change, and after a
+submodule update.
 
-## Host tests
+A port can also be built from a checkout of the game itself: `python3
+configure.py --console-port ../warthog-xbox/port/xbox` in the game's root
+adds the console's targets to the desktop ones.
 
-```sh
-port/xbox/tests/run.sh --xbox
-```
+### A port's build.py
 
-This runs the console's parsers and rules on your computer under
-AddressSanitizer and UndefinedBehaviorSanitizer: the game list, the
-settings record's fold, `join.txt`, the memory class, XLink's addressing
-and the log's tags. `--xbox` adds the Xbox build's own checks (it needs
-`configure.py` to have been run with `--xbox-d3d8`). `--fuzz SECONDS` adds a
-libFuzzer run (LLVM's clang), and `--fetch` fetches the real game list over
-your computer's network.
+`--console-port DIR` loads `DIR/build.py`, which has:
 
-## Package
+| Function | What it does |
+| --- | --- |
+| `add_arguments(parser)` | optional: the port's own `configure.py` options (`--xbox-d3d8`, `--oxdk`) |
+| `configure_inputs(port)` | the port's files and folders whose change reruns `configure.py` |
+| `generate(n, sln, port)` | writes the port's rules and targets; generates nothing when its toolchain is missing |
 
-```sh
-python3 tools/xbox_package.py --maps /path/to/your/maps --out ~/Downloads/Warthog-xbox
-```
+`port` is a `ConsolePort` (`tools/console_build.py`): `port.game` and
+`port.root` are the game's and the port's folders as `build.ninja` names
+them, and it lists the game's sources, defines and include folders
+(`port/linux/port.json`) under the game's folder. `sln` holds
+`configure.py`'s settings: `sln.build_dir`, `sln.port_release`, the console
+options below, and every option by name in `sln.args`. While
+`configure.py` runs, `build.py` can import the game's build modules
+(`tools.console_build`, `tools.ninja_syntax`, `tools.version`).
 
-This lays out one folder for the console's hard disk: `default.xbe`, your
-own `maps/` (`*.map` and `loading.tga`, from your own disc; hard links
-where it can, so they take no more space) and an empty
-`bypass_security.txt`, which online play and play with the PC builds need.
-`--secure` leaves that file out, for System Link between consoles only.
-`--game-list-server HOST[:PORT]` writes a `game_list.txt`, for a console
-whose DNS can't find the list's host. The folder is for your own console:
-don't share it, because it holds your maps.
+### Options for every console
 
-## Onto the console
+| Option | What it does |
+| --- | --- |
+| `--console-port DIR` | a console port's folder; may be given more than once |
+| `--release` | assertions are not checked; a failed one is logged and the game goes on |
+| `--console-players {16,24,32,64}` | the players the network tables hold (`HALO_CONSOLE_PLAYERS`). 16 is the original Xbox's; more are test builds |
+| `--console-debug-tools` | keeps the debug decomp's developer tools (`HALO_CONSOLE_DEBUG_TOOLS`), which console builds leave out by default |
+| `--console-no-debug-asserts` | the release-style build: the debug decomp's asserts compiled out as retail compiled them out, but for the memory checks of `source/memory` and `source/cseries` (`HALO_CONSOLE_NO_DEBUG_ASSERTS`) |
 
-The XBE is built for retail mode. It runs on a modified retail console or
-on a development kit.
+A port adds its own options (toolchains and SDK libraries) with
+`add_arguments`; its README has them.
 
-1. Copy the folder to the console's hard disk, for example to
-   `E:\Games\Warthog\`. On a modified console, use the FTP server of its
-   dashboard. On a development kit, the XDK's Windows tools (Xbox
-   Neighborhood, `xbcp`) copy it too (untested with this build).
-2. Start `default.xbe` from the dashboard.
-3. The game writes its log to `D:\debug.txt` (`D:\` is the XBE's folder).
-   On a development kit, the debug monitor (XBDM) shows its `halo:` lines
-   too.
+### What goes where
 
-The switches beside `default.xbe` (`bypass_security.txt`, `join.txt`,
-`trace.txt` and the rest) are in the README, "Settings on the console".
-xemu (128 MB, NAT) can run the build too: README, "Testing".
+The shared code tests console capabilities, never a console's name, where
+another console could use the same hook: `HALO_CONSOLE_*` defines and
+`console.*` settings. A port turns a capability on from its own build's
+define in `port/linux/include/halo_console_features.h`, which lists them
+and what each hook asks of the port, or on its compile lines:
+
+| Capability | What it is |
+| --- | --- |
+| `HALO_CONSOLE_PLAYERS` | the players the network tables hold, and the console's session limits (`halo_port_limits.h`) |
+| `HALO_CONSOLE_MEMORY_CLASS` | the port answers for its memory class: the baseline's sizes, or larger caches and buffers above it (`halo_console_memory.h`) |
+| `HALO_CONSOLE_DELTA` | Delta Peer as a client |
+| `HALO_CONSOLE_NO_*` | the desktop extras a console leaves out (`halo_port_features.h`, a port's prefix header) |
+| `HALO_CONSOLE_ONLINE_GAMES` | the console's own Online Games screen |
+| `HALO_CONSOLE_LOG_BUFFER`, `HALO_CONSOLE_LOG_THROTTLE` | a log whose writes are slow |
+| `HALO_CONSOLE_GPU_RESOURCE_HOOKS`, `HALO_CONSOLE_NO_WRITE_WATCH`, `HALO_CONSOLE_HOST_ART`, `HALO_CONSOLE_MAP_LOAD_HOOKS`, `HALO_CONSOLE_STATUS_LINE` | a console renderer of its own |
+| `HALO_CONSOLE_GL_LAYER` | a console whose OpenGL is the port's own layer over another graphics API |
+| `HALO_CONSOLE_XBOX_RENDER_SIZES` | the Xbox's texture cache and frame draw limits on a build that otherwise has the desktop's |
+| `HALO_CONSOLE_DEBUG_CHANNEL`, `HALO_CONSOLE_HALT_TO_LAUNCHER` | a console without a standard error, whose halts go back to its launcher |
+| `HALO_CONSOLE_BRINGUP_LOG` | with the developer tools, a console's bring-up logs (frame stages, the main loop's pulse, init.txt's `later` commands) |
+| `HALO_BIG_ENDIAN` | a big-endian console: the maps' headers and tags byte-swapped as they load (`port/console/game`, `tools/tag_swap_generate.py`) |
+| `HALO_WINDOW_TRANSLATED` | with `HALO_64BIT`, a 32-bit console's Xbox addresses in a window placed wherever it has room (`source/cseries/xbox_address.h`) |
+
+A console's name stays in the shared code only for what is that console's
+alone: `HALO_XBOX_CONSOLE` is the original Xbox's own target (the game as
+the Xbox ran it, its SDK's calls, the game's calls into `port/xbox`), and
+`HALO_SWITCH_CONSOLE` the Switch's settings and renderer calls.
+
+A console's own code, its build script and its packaging stay in its
+repository. A change to the shared code goes to the game first; the
+console repository then moves its submodule to it.
+
+### Desktop test builds of a console's side
+
+| Option | What it does |
+| --- | --- |
+| `--console-limits` | a desktop build with the original Xbox's network and object limits, to test the console's side of cross-play on one computer ([cross-play.md](cross-play.md)); never a build to ship |
+| `--window-rebase` | the 32-bit Linux build with its Xbox memory window wherever `HALO_WINDOW_BASE` puts it, as the Switch's guest has it; never a build to ship |
